@@ -23,11 +23,14 @@ class AdasSICapability:
         self.artifacts = artifacts
         self.source_inventory = AdasSourceInventory(self.source_root)
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self.managed_root.mkdir(parents=True, exist_ok=True)
+        if self.source_root.is_dir():
+            self.managed_root.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.cache_path) as db:
             db.executescript("""CREATE TABLE IF NOT EXISTS pages(path TEXT,page INTEGER,text TEXT,source_mtime_ns INTEGER,PRIMARY KEY(path,page)); CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(path,page UNINDEXED,text,content=''); CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT); INSERT OR REPLACE INTO meta VALUES('schema_version','1');""")
 
     def inventory(self, _arguments: dict[str, Any], _user: dict[str, Any]) -> dict[str, Any]:
+        if not self.source_root.is_dir():
+            return {"status": "unavailable", "authoritative_path": str(self.source_root), "documents": [], "applications": [], "message": "Authoritative ADAS SI source is unavailable."}
         result = self.source_inventory.snapshot()
         result.update({"managed_path": str(self.managed_root), "cache_path": str(self.cache_path)})
         return result
@@ -132,6 +135,8 @@ class AdasSICapability:
         query = str(arguments.get("query") or "").strip()
         if not query:
             raise ValueError("query is required")
+        if not self.source_root.is_dir():
+            return {"status": "unavailable", "query": query, "results": [], "artifacts": [], "source": "ADAS SI", "message": "Authoritative ADAS SI source is unavailable."}
         tokens = self._tokens(query)
         results = []
         candidates = self._candidates(query)
@@ -193,6 +198,9 @@ class AdasSICapability:
         }
 
     def write(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        if not self.source_root.is_dir():
+            return {"status": "unavailable", "executed": False, "message": "Authoritative ADAS SI source is unavailable."}
+        self.managed_root.mkdir(parents=True, exist_ok=True)
         record_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(arguments.get("record_id") or ""))
         if not record_id:
             raise ValueError("record_id is required")
@@ -205,6 +213,8 @@ class AdasSICapability:
         return {"status": "success", "receipt": {"operation": "write", "path": str(target), "version": 1, "sha256": digest, "originals_modified": False}}
 
     def modify(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        if not self.source_root.is_dir():
+            return {"status": "unavailable", "executed": False, "message": "Authoritative ADAS SI source is unavailable."}
         record_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(arguments.get("record_id") or ""))
         target = self.managed_root / f"{record_id}.json"
         if not target.is_file():
