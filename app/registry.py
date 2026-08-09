@@ -239,10 +239,12 @@ class CapabilityGateway:
                     "invalid_request": "invalid_arguments", "failed": "execution_error",
                 }.get(domain_status, "success")
                 result = {**result, "status": mapped, "domain_status": domain_status}
-            return self._attach_evidence_contract(result, capability_id), decision
+            if result["status"] in {"success", "partial_success", "no_result"}:
+                result = self._attach_evidence_contract(result, capability_id)
+            return result, decision
         except (TimeoutError, asyncio.TimeoutError):
-            return self._attach_evidence_contract({"status": "timeout", "message": "Capability execution timed out."}, capability_id), decision
+            return {"status": "timeout", "message": "Capability execution timed out."}, decision
         except (TypeError, ValueError) as error:
-            return self._attach_evidence_contract({"status": "invalid_arguments", "message": str(error)[:500]}, capability_id), decision
+            return {"status": "invalid_arguments", "message": str(error)[:500]}, decision
         except Exception as error:
-            return self._attach_evidence_contract({"status": "execution_error", "error": type(error).__name__, "message": "Capability execution failed safely."}, capability_id), decision
+            return {"status": "execution_error", "error": type(error).__name__, "message": "Capability execution failed safely."}, decision
