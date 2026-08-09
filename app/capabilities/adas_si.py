@@ -10,6 +10,8 @@ from typing import Any
 
 from pypdf import PdfReader
 
+from .adas_inventory import AdasSourceInventory
+
 
 class AdasSICapability:
     """ADAS SI evidence retrieval and managed annotations; OEM originals stay immutable."""
@@ -19,14 +21,16 @@ class AdasSICapability:
         self.cache_path = cache_path.resolve()
         self.managed_root = self.source_root / "_xv12_managed"
         self.artifacts = artifacts
+        self.source_inventory = AdasSourceInventory(self.source_root)
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         self.managed_root.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.cache_path) as db:
             db.executescript("""CREATE TABLE IF NOT EXISTS pages(path TEXT,page INTEGER,text TEXT,source_mtime_ns INTEGER,PRIMARY KEY(path,page)); CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(path,page UNINDEXED,text,content=''); CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT); INSERT OR REPLACE INTO meta VALUES('schema_version','1');""")
 
     def inventory(self, _arguments: dict[str, Any], _user: dict[str, Any]) -> dict[str, Any]:
-        documents = list(self.source_root.rglob("*.pdf"))
-        return {"status": "success", "authoritative_path": str(self.source_root), "pdf_count": len(documents), "managed_path": str(self.managed_root), "cache_path": str(self.cache_path)}
+        result = self.source_inventory.snapshot()
+        result.update({"managed_path": str(self.managed_root), "cache_path": str(self.cache_path)})
+        return result
 
     @staticmethod
     def _tokens(query: str) -> list[str]:
@@ -174,7 +178,19 @@ class AdasSICapability:
                 )
             except ValueError:
                 pass
-        return {"status": "success" if any("excerpt" in item for item in ranked) else "no_result", "query": query, "results": ranked, "artifacts": artifacts, "source": "ADAS SI", "broader_search_performed": True}
+        return {
+            "status": "success" if any("excerpt" in item for item in ranked) else "no_result",
+            "query": query,
+            "results": ranked,
+            "artifacts": artifacts,
+            "source": "ADAS SI",
+            "broader_search_performed": True,
+            "evidence_contract": {
+                "authoritative_records_only": True,
+                "specific_facts_traceable_to_results": True,
+                "do_not_infer_missing_records": True,
+            },
+        }
 
     def write(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         record_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(arguments.get("record_id") or ""))
