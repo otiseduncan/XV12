@@ -113,6 +113,28 @@ class BuilderExecutionService:
         parent = self.store.latest_builder_session(user["id"], conversation_id)
         workspace_id = str(arguments.get("workspace_id") or "")
         force_new_workspace = bool(arguments.get("new_workspace"))
+
+        # A Builder job owns the engineering lifecycle for one conversation. The chat card polls
+        # that durable job directly; a model attempt to "check status" by invoking this high-level
+        # capability again must never create a competing session or a second progress card.
+        if parent and not force_new_workspace:
+            active_job_id = str(parent.get("job_id") or "")
+            active_job = self.store.job(active_job_id, user["id"]) if active_job_id else None
+            if active_job and str(active_job.get("state") or "") in {"queued", "running", "cancelling"}:
+                return {
+                    "status": "success",
+                    "queued": True,
+                    "reused_existing_job": True,
+                    "message": (
+                        "A Builder session is already active in this conversation. No second Builder job was created; "
+                        "the existing chat progress card will continue updating automatically."
+                    ),
+                    "do_not_poll_in_this_turn": True,
+                    "active_job": self.store.job_public(active_job),
+                    "builder_session": self.store.builder_session_public(parent),
+                    "workspace_id": str(parent.get("workspace_id") or ""),
+                }
+
         if workspace_id:
             if not self.store.workspace(workspace_id, user["id"]):
                 return {"status": "no_result", "message": "The requested Builder workspace is unavailable."}
