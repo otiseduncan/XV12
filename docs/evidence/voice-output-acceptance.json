@@ -1,0 +1,83 @@
+{
+  "result": "PASS",
+  "timestamp": "2026-08-09T07:31:11.0376565-04:00",
+  "preferred_voice": "Google US English",
+  "default_profile": {
+    "voice_name": "Google US English",
+    "voice_volume": 75,
+    "voice_muted": false
+  },
+  "controlled_runtime": {
+    "exact_default_selected": true,
+    "available_voices": [
+      "Google US English",
+      "XV12 Test Alternate"
+    ],
+    "preview_receipts": [
+      "Previewing Google US English at 25%.",
+      "Previewing Google US English at 100%.",
+      "Previewing XV12 Test Alternate at 100%."
+    ]
+  },
+  "actual_runtime": {
+    "preferred_available": false,
+    "available_en_us_voices": [
+      "Microsoft David - English (United States)",
+      "Microsoft Mark - English (United States)",
+      "Microsoft Zira - English (United States)"
+    ],
+    "fallback_voice": "Microsoft Zira - English (United States)",
+    "preview_receipt": "Previewing Microsoft Zira - English (United States) at 65%.",
+    "dispatch_verified": true
+  },
+  "persistence": {
+    "restart_voice": "XV12 Test Alternate",
+    "restart_volume": 65,
+    "restart_muted": false,
+    "passed": true
+  },
+  "mute": {
+    "volume_before": 65,
+    "volume_while_muted": 65,
+    "preview_disabled": true,
+    "text_response_completed": true,
+    "volume_after_unmute": 65,
+    "passed": true
+  },
+  "dictation_independence": {
+    "muted": true,
+    "microphone_control_enabled": true,
+    "controlled_transcript": "voice acceptance proof",
+    "passed": true
+  },
+  "conversational_control": {
+    "request": "X, set your volume to 40 percent.",
+    "capability_id": "settings.voice.update",
+    "stored_volume": 40,
+    "receipt_status": "updated",
+    "passed": true
+  },
+  "failure_recovery": {
+    "forced_failure": true,
+    "assistant_text_status": "complete",
+    "non_blocking_notice": "X audio output failed. The text response is still available.",
+    "passed": true
+  },
+  "user_isolation": {
+    "user_a_test_volume": 25,
+    "user_a_test_muted": true,
+    "user_b_unchanged": true,
+    "passed": true
+  },
+  "regression": {
+    "voice_output": "5 passed",
+    "all": "32 passed",
+    "acceptance_checks": 12,
+    "standalone_audit": "PASS"
+  },
+  "final_admin_settings": {
+    "voice_name": "Google US English",
+    "voice_volume": 75,
+    "voice_muted": false
+  }
+}

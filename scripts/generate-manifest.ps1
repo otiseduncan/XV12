@@ -28,14 +28,16 @@ $acceptance = if (Test-Path -LiteralPath $acceptanceEvidence) { Get-Content -Lit
 $functionalEvidencePath = Join-Path $script:XV12Root 'docs\evidence\live-functional-acceptance.json'
 $serviceEvidencePath = Join-Path $script:XV12Root 'docs\evidence\service-start-acceptance.json'
 $uiEvidencePath = Join-Path $script:XV12Root 'docs\evidence\ui-voice-project-acceptance.json'
+$voiceOutputEvidencePath = Join-Path $script:XV12Root 'docs\evidence\voice-output-acceptance.json'
 $functionalEvidence = if (Test-Path -LiteralPath $functionalEvidencePath) { Get-Content -LiteralPath $functionalEvidencePath -Raw | ConvertFrom-Json } else { $null }
 $serviceEvidence = if (Test-Path -LiteralPath $serviceEvidencePath) { Get-Content -LiteralPath $serviceEvidencePath -Raw | ConvertFrom-Json } else { $null }
 $uiEvidence = if (Test-Path -LiteralPath $uiEvidencePath) { Get-Content -LiteralPath $uiEvidencePath -Raw | ConvertFrom-Json } else { $null }
+$voiceOutputEvidence = if (Test-Path -LiteralPath $voiceOutputEvidencePath) { Get-Content -LiteralPath $voiceOutputEvidencePath -Raw | ConvertFrom-Json } else { $null }
 
 $manifest = [ordered]@{
-    baseline = 'XODUZ XV12 Functional Assistant Baseline'
+    baseline = 'XODUZ XV12 Functional Assistant Voice Baseline'
     generated_at = [DateTimeOffset]::Now.ToString('o')
-    tag = 'xv12-baseline-functional-assistant-v1'
+    tag = 'xv12-baseline-functional-assistant-voice-v1'
     model = [ordered]@{
         filename = [IO.Path]::GetFileName($modelPath)
         repository_relative_path = [string]$script:RuntimeConfig.model.path
@@ -70,6 +72,7 @@ $manifest = [ordered]@{
         functional_assistant = [ordered]@{ result=if ($functionalEvidence) { $functionalEvidence.result } else { 'UNKNOWN' }; turns=if ($functionalEvidence) { $functionalEvidence.turns.Count } else { 0 } }
         allowlisted_service_start = [ordered]@{ result=if ($serviceEvidence) { $serviceEvidence.result } else { 'UNKNOWN' }; health=if ($serviceEvidence) { $serviceEvidence.health.status } else { 'unknown' } }
         browser = [ordered]@{ result=if ($uiEvidence) { $uiEvidence.result } else { 'UNKNOWN' }; desktop=$true; responsive_contract=$true; streaming=$true; internal_scroll=$true; smart_scroll=$true; project_lifecycle=$true; voice_controlled_transcript=$true; native_microphone='permission_denied_in_automation_browser' }
+        voice_output = [ordered]@{ result=if ($voiceOutputEvidence) { $voiceOutputEvidence.result } else { 'UNKNOWN' }; preferred_voice='Google US English'; actual_runtime_fallback=if ($voiceOutputEvidence) { $voiceOutputEvidence.actual_runtime.fallback_voice } else { $null }; per_user=$true; conversational_control=$true; failure_non_blocking=$true }
         standalone_audit = [ordered]@{ result=$audit.result; scanned_files=$audit.scanned_files; donor_runtime_references=$audit.donor_runtime_references; outside_runtime_paths=$audit.outside_runtime_paths }
     }
 }

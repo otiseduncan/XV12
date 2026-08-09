@@ -1,6 +1,6 @@
 # XODUZ XV12 Functional Assistant Baseline
 
-XV12 is a standalone, local-first XODUZ application. The functional baseline preserves the fast model-first conversation core and adds a permanent bounded shell, trusted conversational identity, optional project context, voice dictation, live current-information search, verified ADAS knowledge, authenticated Calibration IQ reads, and an admin-only allowlisted Calibration IQ start action.
+XV12 is a standalone, local-first XODUZ application. The functional baseline preserves the fast model-first conversation core and adds a permanent bounded shell, trusted conversational identity, optional project context, independent voice dictation and spoken output, live current-information search, verified ADAS knowledge, authenticated Calibration IQ reads, and an admin-only allowlisted Calibration IQ start action.
 
 ## Start XODUZ
 
@@ -61,7 +61,7 @@ Run every fast pack:
 scripts\run-regression.ps1 -Pack all
 ```
 
-Focused packs include `chat-core`, `ui-shell`, `auth`, `user-identity`, `memory-isolation`, `voice`, `project-context`, `capability-registry`, `web`, `databases`, `attachments`, and `launcher`.
+Focused packs include `chat-core`, `ui-shell`, `auth`, `user-identity`, `memory-isolation`, `voice`, `voice-output`, `project-context`, `capability-registry`, `web`, `databases`, `attachments`, and `launcher`.
 
 Run the live production-route acceptance checks while XV12 is running:
 
@@ -69,4 +69,4 @@ Run the live production-route acceptance checks while XV12 is running:
 scripts\acceptance.ps1
 ```
 
-The original core freeze remains tagged `xv12-baseline-core-v1`. Functional-assistant evidence is under `docs/evidence/` and frozen by `xv12-baseline-functional-assistant-v1`.
+The original core freeze remains tagged `xv12-baseline-core-v1`, and the initial functional phase remains tagged `xv12-baseline-functional-assistant-v1`. Functional-assistant evidence is under `docs/evidence/`; the voice-output addendum is frozen by `xv12-baseline-functional-assistant-voice-v1`.

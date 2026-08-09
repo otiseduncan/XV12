@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
+DEFAULT_VOICE_NAME = "Google US English"
+DEFAULT_VOICE_VOLUME = 75
+
+
 def utcnow() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -145,6 +149,13 @@ class UserScopedStore:
                     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                     activated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS voice_settings (
+                    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    voice_name TEXT NOT NULL DEFAULT 'Google US English',
+                    voice_volume INTEGER NOT NULL DEFAULT 75 CHECK(voice_volume BETWEEN 0 AND 100),
+                    voice_muted INTEGER NOT NULL DEFAULT 0 CHECK(voice_muted IN (0,1)),
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 """
             )
@@ -155,7 +166,7 @@ class UserScopedStore:
             if "metadata_json" not in message_columns:
                 db.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'")
             db.execute(
-                "INSERT INTO app_meta(key,value) VALUES('schema_version','2') ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+                "INSERT INTO app_meta(key,value) VALUES('schema_version','3') ON CONFLICT(key) DO UPDATE SET value=excluded.value"
             )
         self._ensure_owner_record()
 
@@ -234,6 +245,54 @@ class UserScopedStore:
             db.execute("UPDATE users SET preferred_name=? WHERE id=? AND role='user'", (value, user_id))
             row = db.execute("SELECT * FROM users WHERE id=? AND role='user'", (user_id,)).fetchone()
             return dict(row) if row else None
+
+    def get_voice_settings(self, user_id: str) -> dict[str, Any]:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT voice_name,voice_volume,voice_muted,updated_at FROM voice_settings WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+        if row:
+            settings = dict(row)
+            settings["voice_muted"] = bool(settings["voice_muted"])
+        else:
+            settings = {
+                "voice_name": DEFAULT_VOICE_NAME,
+                "voice_volume": DEFAULT_VOICE_VOLUME,
+                "voice_muted": False,
+                "updated_at": None,
+            }
+        settings["preferred_voice"] = DEFAULT_VOICE_NAME
+        return settings
+
+    def set_voice_settings(self, user_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+        allowed = {"voice_name", "voice_volume", "voice_muted"}
+        unexpected = set(changes) - allowed
+        if unexpected:
+            raise ValueError(f"Unsupported voice setting: {sorted(unexpected)[0]}")
+        current = self.get_voice_settings(user_id)
+        voice_name = str(changes.get("voice_name", current["voice_name"])).strip()
+        if not voice_name or len(voice_name) > 120:
+            raise ValueError("voice_name must contain 1 to 120 characters")
+        volume = changes.get("voice_volume", current["voice_volume"])
+        if isinstance(volume, bool) or not isinstance(volume, int) or not 0 <= volume <= 100:
+            raise ValueError("voice_volume must be an integer from 0 to 100")
+        muted = changes.get("voice_muted", current["voice_muted"])
+        if not isinstance(muted, bool):
+            raise ValueError("voice_muted must be a boolean")
+        now = utcnow()
+        with self.connect() as db:
+            db.execute(
+                """INSERT INTO voice_settings(user_id,voice_name,voice_volume,voice_muted,updated_at)
+                   VALUES(?,?,?,?,?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     voice_name=excluded.voice_name,
+                     voice_volume=excluded.voice_volume,
+                     voice_muted=excluded.voice_muted,
+                     updated_at=excluded.updated_at""",
+                (user_id, voice_name, volume, int(muted), now),
+            )
+        return self.get_voice_settings(user_id)
 
     def create_oidc_attempt(self) -> tuple[str, str]:
         state, nonce = secrets.token_urlsafe(36), secrets.token_urlsafe(36)

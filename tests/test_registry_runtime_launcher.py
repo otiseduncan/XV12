@@ -14,9 +14,9 @@ from .conftest import login
 def test_registry_is_versioned_and_gateway_executes_registered_tier_zero(client):
     login(client, "user-a")
     listing = client.get("/api/capabilities").json()
-    assert listing["registry_version"] == "2.0.0"
+    assert listing["registry_version"] == "2.1.0"
     ids = {item["id"] for item in listing["capabilities"]}
-    assert {"system.health.read", "web.current.search", "adas.coverage.read", "project.list"} <= ids
+    assert {"system.health.read", "web.current.search", "adas.coverage.read", "project.list", "settings.voice.read", "settings.voice.update"} <= ids
     assert "service.calibration_iq.start" not in ids
     result = client.post("/api/capabilities/system.health.read", json={"arguments": {}})
     assert result.status_code == 200

@@ -56,6 +56,12 @@ class PreferredNameUpdate(BaseModel):
     preferred_name: str = Field(min_length=1, max_length=80)
 
 
+class VoiceSettingsUpdate(BaseModel):
+    voice_name: str | None = Field(default=None, min_length=1, max_length=120)
+    voice_volume: int | None = Field(default=None, ge=0, le=100)
+    voice_muted: bool | None = None
+
+
 def sse(event: str, payload: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
@@ -114,7 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "ok": bool(model_health.get("reachable") and model_health.get("alias_ok")),
             "application": {"name": "XODUZ XV12", "status": "healthy"},
-            "database": {"status": "healthy", "schema": "2", "path_owned": settings.root in settings.database_path.parents},
+            "database": {"status": "healthy", "schema": "3", "path_owned": settings.root in settings.database_path.parents},
             "model": {
                 **model_health,
                 "expected_alias": settings.model_alias,
@@ -162,6 +168,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     gateway.register("project.detach", lambda _arguments, user: {"status": "detached", "changed": store.deactivate_project(user["id"])})
     gateway.register("service.calibration_iq.start", lambda arguments: start_calibration_iq(settings, arguments))
+    gateway.register(
+        "settings.voice.read",
+        lambda _arguments, user: {"status": "verified", "settings": store.get_voice_settings(user["id"])},
+    )
+    gateway.register(
+        "settings.voice.update",
+        lambda arguments, user: {"status": "updated", "settings": store.set_voice_settings(user["id"], arguments)},
+    )
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
@@ -189,6 +203,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/conversations")
     def list_conversations(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
         return store.list_conversations(user["id"])
+
+    @app.get("/api/settings/voice")
+    def get_voice_settings(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return store.get_voice_settings(user["id"])
+
+    @app.patch("/api/settings/voice")
+    def update_voice_settings(payload: VoiceSettingsUpdate, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        changes = {
+            key: value
+            for key, value in {
+                "voice_name": payload.voice_name,
+                "voice_volume": payload.voice_volume,
+                "voice_muted": payload.voice_muted,
+            }.items()
+            if value is not None
+        }
+        return store.set_voice_settings(user["id"], changes)
 
     @app.post("/api/conversations", status_code=201)
     def create_conversation(payload: ConversationCreate, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:

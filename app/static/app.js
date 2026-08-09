@@ -1,6 +1,7 @@
 const state = {
   user: null, conversations: [], projects: [], currentConversation: null,
   pendingAttachments: [], controller: null, sending: false, pinnedToBottom: true,
+  voiceSettings: null, availableVoices: [], effectiveVoice: null, voiceInitialized: false, ttsSpeaking: false,
 };
 const $ = (selector) => document.querySelector(selector);
 const loginView = $("#login-view"), appView = $("#app-view"), messages = $("#messages");
@@ -15,6 +16,28 @@ class ControlledSpeechRecognition {
   }
   stop() { this.onend?.(); }
   abort() { this.onerror?.({ error: "aborted" }); this.onend?.(); }
+}
+
+class ControlledSpeechSynthesisUtterance {
+  constructor(text) { this.text = text; this.voice = null; this.volume = 1; this.lang = "en-US"; }
+}
+
+class ControlledSpeechSynthesis {
+  constructor(shouldFail = false) {
+    this.voices = [
+      { name: "Google US English", lang: "en-US", default: true, localService: true },
+      { name: "XV12 Test Alternate", lang: "en-US", default: false, localService: true },
+    ];
+    this.listeners = {};
+    this.shouldFail = shouldFail;
+  }
+  getVoices() { return this.voices; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  speak(utterance) {
+    window.__XV12_TTS_TEST_LAST__ = { text: utterance.text, voice_name: utterance.voice?.name || null, volume: utterance.volume };
+    utterance.onstart?.(); setTimeout(() => this.shouldFail ? utterance.onerror?.({ error: "synthesis-failed" }) : utterance.onend?.(), 20);
+  }
+  cancel() { window.__XV12_TTS_TEST_CANCELLED__ = true; }
 }
 
 async function api(path, options = {}) {
@@ -41,8 +64,13 @@ function showLogin(config) {
 
 async function boot() {
   const config = await api("/api/auth/config");
-  if (config.mode === "test" && new URLSearchParams(location.search).get("voice_test") === "1") window.__XV12_SPEECH_RECOGNITION__ = ControlledSpeechRecognition;
-  try { state.user = await api("/api/auth/me"); showApp(); await Promise.all([loadConversations(), loadProjects(), checkHealth()]); }
+  if (config.mode === "test" && new URLSearchParams(location.search).get("voice_test") === "1") {
+    const voiceTestFailure = new URLSearchParams(location.search).get("voice_fail") === "1";
+    window.__XV12_SPEECH_RECOGNITION__ = ControlledSpeechRecognition;
+    window.__XV12_SPEECH_SYNTHESIS__ = new ControlledSpeechSynthesis(voiceTestFailure);
+    window.__XV12_SPEECH_UTTERANCE__ = ControlledSpeechSynthesisUtterance;
+  }
+  try { state.user = await api("/api/auth/me"); showApp(); await Promise.all([loadConversations(), loadProjects(), checkHealth(), loadVoiceSettings()]); }
   catch { showLogin(config); }
 }
 
@@ -52,6 +80,123 @@ function showApp() {
   $("#user-name").textContent = name; $("#user-role").textContent = state.user.role;
   $("#top-user").textContent = `${name} · ${state.user.role}`;
   $("#user-initial").textContent = name.slice(0, 1).toUpperCase(); $("#welcome-name").textContent = `What are we working on, ${name}?`;
+}
+
+function speechEngine() { return window.__XV12_SPEECH_SYNTHESIS__ || window.speechSynthesis || null; }
+function utteranceType() { return window.__XV12_SPEECH_UTTERANCE__ || window.SpeechSynthesisUtterance || null; }
+function updateAvatarActivity() { avatarStage.classList.toggle("speaking", state.sending || state.ttsSpeaking); }
+function isLikelyFemaleVoice(voice) { return /\b(zira|aria|jenny|samantha|ava|female)\b/i.test(voice.name); }
+
+function resolveEffectiveVoice() {
+  if (!state.voiceSettings) return null;
+  const requested = state.voiceSettings.voice_name;
+  state.effectiveVoice = state.availableVoices.find((voice) => voice.name === requested)
+    || state.availableVoices.find((voice) => String(voice.lang).toLowerCase() === "en-us" && isLikelyFemaleVoice(voice))
+    || state.availableVoices.find((voice) => String(voice.lang).toLowerCase() === "en-us")
+    || (speechEngine() && utteranceType() ? { name: "Browser default en-US", lang: "en-US", runtimeDefault: true } : null)
+    || null;
+  refreshVoiceControls();
+  return state.effectiveVoice;
+}
+
+function enumerateVoices() {
+  const engine = speechEngine();
+  state.availableVoices = engine?.getVoices ? engine.getVoices().slice().sort((a, b) => a.name.localeCompare(b.name)) : [];
+  resolveEffectiveVoice();
+}
+
+function initializeVoiceOutput() {
+  if (state.voiceInitialized) { enumerateVoices(); return; }
+  state.voiceInitialized = true;
+  const engine = speechEngine();
+  if (!engine) { refreshVoiceControls(); return; }
+  engine.addEventListener?.("voiceschanged", enumerateVoices);
+  enumerateVoices();
+}
+
+async function loadVoiceSettings() {
+  state.voiceSettings = await api("/api/settings/voice");
+  initializeVoiceOutput(); renderQuickMute();
+}
+
+function voiceDiagnostic() {
+  if (!speechEngine()) return "Speech output is unavailable in this browser. Text chat remains ready.";
+  if (!state.effectiveVoice) return "No speech voice is currently exposed by this browser. Text chat remains ready.";
+  if (state.effectiveVoice.runtimeDefault) return `Preferred ${state.voiceSettings.voice_name} is unavailable. The browser exposed no voice list; using its default en-US synthesis voice.`;
+  if (state.effectiveVoice.name !== state.voiceSettings?.voice_name) return `Preferred ${state.voiceSettings.voice_name} is unavailable. Using en-US fallback: ${state.effectiveVoice.name}.`;
+  return `Runtime voice: ${state.effectiveVoice.name} (${state.effectiveVoice.lang || "language unknown"}).`;
+}
+
+function renderQuickMute() {
+  const button = $("#quick-mute");
+  if (!button || !state.voiceSettings) return;
+  const muted = state.voiceSettings.voice_muted;
+  button.textContent = muted ? "🔇" : "🔊";
+  button.title = muted ? "Unmute X" : "Mute X";
+  button.setAttribute("aria-label", button.title);
+  button.setAttribute("aria-pressed", String(muted));
+}
+
+function refreshVoiceControls() {
+  const select = $("#voice-select");
+  if (!select || !state.voiceSettings) return;
+  select.replaceChildren();
+  const requested = state.voiceSettings.voice_name;
+  if (!state.availableVoices.some((voice) => voice.name === requested)) {
+    const missing = document.createElement("option");
+    missing.value = requested; missing.textContent = `${requested} (preferred, unavailable)`; select.append(missing);
+  }
+  state.availableVoices.forEach((voice) => {
+    const option = document.createElement("option");
+    option.value = voice.name; option.textContent = `${voice.name}${voice.lang ? ` · ${voice.lang}` : ""}`; select.append(option);
+  });
+  select.value = requested; select.disabled = state.availableVoices.length === 0;
+  const diagnostic = $("#voice-runtime"); if (diagnostic) diagnostic.textContent = voiceDiagnostic();
+  const volume = $("#voice-volume"); if (volume) volume.value = state.voiceSettings.voice_volume;
+  const output = $("#voice-volume-value"); if (output) output.value = state.voiceSettings.voice_volume;
+  const mute = $("#voice-muted"); if (mute) mute.checked = state.voiceSettings.voice_muted;
+  const preview = $("#preview-voice"); if (preview) preview.disabled = state.voiceSettings.voice_muted || !state.effectiveVoice;
+}
+
+function applyVoiceSettings(settings) {
+  const wasMuted = state.voiceSettings?.voice_muted;
+  state.voiceSettings = settings;
+  if (settings.voice_muted && !wasMuted) speechEngine()?.cancel?.();
+  resolveEffectiveVoice(); renderQuickMute(); refreshVoiceControls();
+}
+
+async function saveVoiceSettings(changes) {
+  const previous = state.voiceSettings;
+  applyVoiceSettings({ ...state.voiceSettings, ...changes });
+  try {
+    const settings = await api("/api/settings/voice", { method: "PATCH", body: JSON.stringify(changes) });
+    applyVoiceSettings(settings); return settings;
+  } catch (error) {
+    applyVoiceSettings(previous); toast(`Voice setting was not saved: ${error.message}`, "error"); return null;
+  }
+}
+
+function speakX(text, { preview = false } = {}) {
+  if (!state.voiceSettings || state.voiceSettings.voice_muted) {
+    if (preview) toast("X is muted. Unmute to preview the voice.");
+    return false;
+  }
+  const engine = speechEngine(), Utterance = utteranceType(), voice = resolveEffectiveVoice();
+  if (!engine || !Utterance || !voice) {
+    toast("X could not start speech output. Text chat remains available.", "error"); return false;
+  }
+  try {
+    engine.cancel();
+    const utterance = new Utterance(String(text).trim());
+    if (!voice.runtimeDefault) utterance.voice = voice;
+    utterance.lang = voice.lang || "en-US"; utterance.volume = state.voiceSettings.voice_volume / 100;
+    utterance.onstart = () => { state.ttsSpeaking = true; updateAvatarActivity(); $("#presence-label").textContent = "Speaking"; };
+    utterance.onend = () => { state.ttsSpeaking = false; updateAvatarActivity(); if (!state.sending) $("#presence-label").textContent = "Ready"; };
+    utterance.onerror = () => { state.ttsSpeaking = false; updateAvatarActivity(); toast("X audio output failed. The text response is still available.", "error"); };
+    engine.speak(utterance); return true;
+  } catch {
+    state.ttsSpeaking = false; updateAvatarActivity(); toast("X audio output failed. The text response is still available.", "error"); return false;
+  }
 }
 
 async function checkHealth() {
@@ -149,7 +294,7 @@ async function sendMessage(raw) {
   input.value = ""; resizeInput(); welcome.classList.add("hidden"); messages.classList.add("active"); state.pinnedToBottom = true;
   appendMessage("user", text); const assistant = appendMessage("assistant", "", "complete"); assistant.text.classList.add("typing-cursor");
   state.sending = true; state.controller = new AbortController(); sendButton.textContent = "■"; composerStatus.className = "composer-status"; composerStatus.textContent = "X is thinking…";
-  avatarStage.classList.add("speaking"); $("#presence-label").textContent = "Thinking";
+  updateAvatarActivity(); $("#presence-label").textContent = "Thinking";
   const ids = state.pendingAttachments.map((item) => item.id); state.pendingAttachments = []; renderAttachmentChips();
   try {
     const response = await fetch(`/api/conversations/${state.currentConversation.id}/stream`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: text, attachment_ids: ids }), signal: state.controller.signal });
@@ -164,18 +309,22 @@ async function sendMessage(raw) {
         if (event === "delta") { assistant.text.textContent += data.text; scrollLatest(); }
         if (event === "capability") {
           if (data.status === "running") { composerStatus.textContent = `Using ${data.capability_id}…`; $("#presence-label").textContent = "Working"; }
-          if (data.status === "complete") { appendCard(assistant.cards, data); scrollLatest(); if (data.capability_id.startsWith("project.")) await loadProjects(); }
+          if (data.status === "complete") {
+            appendCard(assistant.cards, data); scrollLatest();
+            if (data.capability_id.startsWith("project.")) await loadProjects();
+            if (data.capability_id === "settings.voice.update" && data.result?.settings) applyVoiceSettings(data.result.settings);
+          }
         }
         if (event === "error") throw new Error(data.message);
       }
     }
-    assistant.text.classList.remove("typing-cursor"); composerStatus.textContent = "Response complete."; $("#presence-label").textContent = "Ready";
+    assistant.text.classList.remove("typing-cursor"); composerStatus.textContent = "Response complete."; $("#presence-label").textContent = "Ready"; speakX(assistant.text.textContent);
     await loadConversations();
   } catch (error) {
     assistant.text.classList.remove("typing-cursor");
     if (error.name === "AbortError") { assistant.wrapper.classList.add("interrupted"); composerStatus.textContent = "Response stopped."; }
     else { assistant.wrapper.classList.add("failed"); composerStatus.className = "composer-status error"; composerStatus.textContent = error.message; toast(error.message, "error"); }
-  } finally { state.sending = false; state.controller = null; sendButton.textContent = "↑"; avatarStage.classList.remove("speaking"); $("#presence-label").textContent = "Ready"; input.focus(); }
+  } finally { state.sending = false; state.controller = null; sendButton.textContent = "↑"; updateAvatarActivity(); if (!state.ttsSpeaking) $("#presence-label").textContent = "Ready"; input.focus(); }
 }
 
 async function uploadFile(file) {
@@ -200,7 +349,20 @@ async function showModal(kind) {
     content.querySelector("#project-form").addEventListener("submit", async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); const project = await api("/api/projects", { method: "POST", body: JSON.stringify(data) }); await api(`/api/projects/${project.id}/activate`, { method: "POST" }); await loadProjects(); await showModal("projects"); toast("Project registered and activated.", "success"); });
   } else if (kind === "tools") {
     const listing = await api("/api/capabilities"); content.innerHTML = `<p class="eyebrow">AUTHORITATIVE REGISTRY</p><h2>Capabilities</h2><p>${listing.capabilities.length} capabilities are authorized for this account.</p><ul class="modal-list"></ul>`; const list = content.querySelector("ul"); listing.capabilities.forEach((item) => { const li = document.createElement("li"); li.innerHTML = `<strong></strong><span></span>`; li.querySelector("strong").textContent = item.id; li.querySelector("span").textContent = `Tier ${item.risk_tier} · ${item.health} · ${item.description}`; list.append(li); });
-  } else { content.innerHTML = `<p class="eyebrow">XODUZ XV12</p><h2>Settings</h2><p>Your authenticated identity and user-scoped context are server-authoritative.</p><ul class="modal-list"><li><strong>Conversational identity</strong><span>${state.user.conversational_name} · ${state.user.role}</span></li><li><strong>Runtime</strong><span>Local Qwen3-Coder · 32K context</span></li><li><strong>Privacy</strong><span>XV12-owned local storage</span></li></ul>`; }
+  } else {
+    content.innerHTML = `<p class="eyebrow">XODUZ XV12</p><h2>Settings</h2><p>Preferences are private to your authenticated account.</p><section class="settings-section"><h3>Appearance</h3><div class="setting-row"><span class="setting-label">Theme</span><span class="account-value">XODUZ Dark</span></div></section><section class="settings-section"><h3>Voice</h3><div class="setting-row"><label for="voice-select">XODUZ voice</label><select id="voice-select" aria-label="XODUZ voice"></select></div><p id="voice-runtime" class="setting-note"></p><div class="setting-row"><label for="voice-volume">Volume</label><div class="volume-control"><input id="voice-volume" type="range" min="0" max="100" step="1"><output id="voice-volume-value" for="voice-volume"></output></div></div><div class="setting-row"><span class="setting-label">Spoken output</span><label class="toggle-control"><input id="voice-muted" type="checkbox"> Mute X</label></div><div class="setting-row"><span class="setting-label">Test output</span><div class="settings-actions"><button id="preview-voice" class="secondary-button" type="button">Preview Voice</button></div></div><p id="voice-preview-status" class="setting-note" aria-live="polite"></p></section><section class="settings-section"><h3>Account</h3><div class="setting-row"><span class="setting-label">Signed in</span><span id="settings-account" class="account-value"></span></div><div class="setting-row"><span class="setting-label">Session</span><button id="settings-logout" class="secondary-button" type="button">Log out</button></div></section>`;
+    $("#settings-account").textContent = `${state.user.conversational_name} · ${state.user.role}`;
+    refreshVoiceControls();
+    $("#voice-select").addEventListener("change", (event) => saveVoiceSettings({ voice_name: event.target.value }));
+    $("#voice-volume").addEventListener("input", (event) => { $("#voice-volume-value").value = event.target.value; });
+    $("#voice-volume").addEventListener("change", (event) => saveVoiceSettings({ voice_volume: Number(event.target.value) }));
+    $("#voice-muted").addEventListener("change", (event) => saveVoiceSettings({ voice_muted: event.target.checked }));
+    $("#preview-voice").addEventListener("click", () => {
+      const started = speakX("Hello. I'm X. This is a preview of my current voice settings.", { preview: true });
+      $("#voice-preview-status").textContent = started ? `Previewing ${state.effectiveVoice.name} at ${state.voiceSettings.voice_volume}%.` : "Voice preview did not start.";
+    });
+    $("#settings-logout").addEventListener("click", async () => { speechEngine()?.cancel?.(); await api("/api/auth/logout", { method: "POST" }); window.location.reload(); });
+  }
   if (!$("#modal").open) $("#modal").showModal();
 }
 
@@ -223,8 +385,9 @@ function resizeInput() { input.style.height = "auto"; input.style.height = `${Ma
 
 $("#google-login").addEventListener("click", () => window.location.assign("/api/auth/google/start"));
 document.querySelectorAll("[data-persona]").forEach((button) => button.addEventListener("click", async () => { $("#login-status").textContent = "Signing in…"; try { state.user = await api("/api/auth/test-login", { method: "POST", body: JSON.stringify({ persona: button.dataset.persona }) }); showApp(); await Promise.all([loadConversations(), loadProjects(), checkHealth()]); } catch (error) { $("#login-status").textContent = error.message; } }));
-$("#logout").addEventListener("click", async () => { await api("/api/auth/logout", { method: "POST" }); window.location.reload(); });
-$("#top-logout").addEventListener("click", async () => { await api("/api/auth/logout", { method: "POST" }); window.location.reload(); });
+$("#logout").addEventListener("click", async () => { speechEngine()?.cancel?.(); await api("/api/auth/logout", { method: "POST" }); window.location.reload(); });
+$("#top-logout").addEventListener("click", async () => { speechEngine()?.cancel?.(); await api("/api/auth/logout", { method: "POST" }); window.location.reload(); });
+$("#quick-mute").addEventListener("click", () => { if (state.voiceSettings) saveVoiceSettings({ voice_muted: !state.voiceSettings.voice_muted }); });
 $("#new-chat").addEventListener("click", createConversation); $("#history-search").addEventListener("input", renderConversationList);
 $("#composer").addEventListener("submit", (event) => { event.preventDefault(); if (state.sending) state.controller?.abort(); else sendMessage(input.value); });
 input.addEventListener("input", resizeInput); input.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("#composer").requestSubmit(); } });

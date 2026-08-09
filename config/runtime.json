@@ -22,8 +22,8 @@
     "adas_database": "data/knowledge/adas_knowledge.sqlite"
   },
   "versions": {
-    "database_schema": 2,
-    "migration": "0002_functional_assistant",
-    "capability_registry": "2.0.0"
+    "database_schema": 3,
+    "migration": "0003_voice_output_settings",
+    "capability_registry": "2.1.0"
   }
 }

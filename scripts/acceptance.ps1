@@ -18,7 +18,9 @@ Add-Check 'sole-admin' ([int]$health.auth.admin_count -eq 1) ([string]$health.au
 $adminSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 $login = Invoke-RestMethod -Uri "$base/api/auth/test-login" -Method Post -ContentType 'application/json' -Body '{"persona":"admin"}' -WebSession $adminSession
 Add-Check 'admin-binding' ($login.role -eq 'admin' -and $login.conversational_name -eq 'Otis') ([string]$login.conversational_name)
-Add-Check 'functional-registry' ($health.registry.version -eq '2.0.0' -and $health.services.adas.status -eq 'available') ([string]$health.registry.version)
+Add-Check 'functional-registry' ($health.registry.version -eq '2.1.0' -and $health.services.adas.status -eq 'available') ([string]$health.registry.version)
+$voiceDefault = Invoke-RestMethod -Uri "$base/api/settings/voice" -WebSession $adminSession
+Add-Check 'voice-output-default' ($voiceDefault.preferred_voice -eq 'Google US English' -and [int]$voiceDefault.voice_volume -ge 0 -and [int]$voiceDefault.voice_volume -le 100) "$($voiceDefault.voice_name) at $($voiceDefault.voice_volume)"
 $conversation = Invoke-RestMethod -Uri "$base/api/conversations" -Method Post -ContentType 'application/json' -Body '{"title":"New conversation"}' -WebSession $adminSession
 $chatBody = @{ message='Good morning X.'; attachment_ids=@() } | ConvertTo-Json
 $stream = Invoke-WebRequest -UseBasicParsing -Uri "$base/api/conversations/$($conversation.id)/stream" -Method Post -ContentType 'application/json' -Body $chatBody -WebSession $adminSession -TimeoutSec 300

@@ -1,7 +1,7 @@
 {
-  "baseline": "XODUZ XV12 Functional Assistant Baseline",
-  "generated_at": "2026-08-09T06:57:15.3091245-04:00",
-  "tag": "xv12-baseline-functional-assistant-v1",
+  "baseline": "XODUZ XV12 Functional Assistant Voice Baseline",
+  "generated_at": "2026-08-09T07:31:54.0969509-04:00",
+  "tag": "xv12-baseline-functional-assistant-voice-v1",
   "model": {
     "filename": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
     "repository_relative_path": "models/qwen3-coder-30b-a3b/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
@@ -58,8 +58,8 @@
   },
   "database": {
     "engine": "SQLite",
-    "schema_version": 2,
-    "migration": "0002_functional_assistant"
+    "schema_version": 3,
+    "migration": "0003_voice_output_settings"
   },
   "owner_data": {
     "adas": {
@@ -74,8 +74,8 @@
       "allowlisted_admin_start": true
     }
   },
-  "capability_registry_version": "2.0.0",
-  "configuration_sha256": "901b8ebf0c7025e8b82909c2be86b2bb9b0324748302abf2d29a0b368d803a58",
+  "capability_registry_version": "2.1.0",
+  "configuration_sha256": "03a8d7dee525659c976bb8d90c6320bd1bd8d203f55caddce7c97868d0bd5875",
   "avatar_assets": [
     {
       "name": "xoduz-512.png",
@@ -101,11 +101,11 @@
   "validation": {
     "regression": {
       "result": "PASS",
-      "passed": 27
+      "passed": 32
     },
     "acceptance": {
       "result": "PASS",
-      "checks": 11
+      "checks": 12
     },
     "launcher": {
       "result": "PASS",
@@ -134,9 +134,17 @@
       "voice_controlled_transcript": true,
       "native_microphone": "permission_denied_in_automation_browser"
     },
+    "voice_output": {
+      "result": "PASS",
+      "preferred_voice": "Google US English",
+      "actual_runtime_fallback": "Microsoft Zira - English (United States)",
+      "per_user": true,
+      "conversational_control": true,
+      "failure_non_blocking": true
+    },
     "standalone_audit": {
       "result": "PASS",
-      "scanned_files": 55,
+      "scanned_files": 58,
       "donor_runtime_references": 0,
       "outside_runtime_paths": 0
     }

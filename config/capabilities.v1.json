@@ -1,5 +1,5 @@
 {
-  "registry_version": "2.0.0",
+  "registry_version": "2.1.0",
   "capabilities": [
     {
       "id": "system.health.read", "family": "system",
@@ -80,6 +80,22 @@
       "arguments_schema": {"type": "object", "properties": {}, "additionalProperties": false},
       "result_schema": {"type": "object"}, "timeout_seconds": 180, "health": "available",
       "execution_environment": "fixed-calibration-iq-launcher", "idempotency": "safe"
+    },
+    {
+      "id": "settings.voice.read", "family": "settings",
+      "description": "Read the authenticated user's authoritative XODUZ voice, volume, and mute preferences.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available",
+      "execution_environment": "xv12-user-settings", "idempotency": "safe"
+    },
+    {
+      "id": "settings.voice.update", "family": "settings",
+      "description": "Update the authenticated user's XODUZ spoken-output settings. Call this when the user asks to mute or unmute X, set voice volume, or change the voice. Supply only requested fields; mute never changes saved volume.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "properties": {"voice_name": {"type": "string", "minLength": 1, "maxLength": 120}, "voice_volume": {"type": "integer", "minimum": 0, "maximum": 100}, "voice_muted": {"type": "boolean"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available",
+      "execution_environment": "xv12-user-settings", "idempotency": "user-requested-write"
     },
     {
       "id": "admin.capabilities.inspect", "family": "administration",
