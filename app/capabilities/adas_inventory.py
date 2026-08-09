@@ -79,8 +79,14 @@ class AdasSourceInventory:
     def _canonical_model(model: str) -> str:
         value = re.sub(r"\s+", " ", model).strip(" ._-")
         value = re.sub(r"\bF\s*[- ]?\s*150\b", "F-150", value, flags=re.IGNORECASE)
-        if value.isupper() and len(value) > 3:
-            value = value.title()
+        if value.isupper():
+            normalized = []
+            for token in value.split():
+                if any(character.isdigit() for character in token) or (token.isalpha() and len(token) <= 3):
+                    normalized.append(token)
+                else:
+                    normalized.append(token.title())
+            value = " ".join(normalized)
         return value
 
     @classmethod
