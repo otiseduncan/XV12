@@ -1,0 +1,22 @@
+name: XV12 capability contract
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  capability-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install focused test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Run capability truth and inventory regressions
+        run: python -m pytest -q tests/test_capability_truth_inventory.py
