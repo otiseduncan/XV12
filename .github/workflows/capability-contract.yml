@@ -9,6 +9,13 @@ jobs:
   capability-contract:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      XV12_AUTH_MODE: test
+      XV12_OWNER_GOOGLE_SUB: ci-test-admin-sub
+      XV12_COOKIE_SECURE: '0'
+      XV12_GOOGLE_CLIENT_ID: ci-test.apps.googleusercontent.com
+      XV12_GOOGLE_CLIENT_SECRET: ci-test-secret
+      XV12_GOOGLE_REDIRECT_URI: http://127.0.0.1:8120/api/auth/google/callback
     steps:
       - name: Checkout
         uses: actions/checkout@v4
