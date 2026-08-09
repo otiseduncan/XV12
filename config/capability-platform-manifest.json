@@ -2,6 +2,7 @@
   "platform_baseline": "xv12-capability-platform-v1",
   "created_at": "2026-08-09T12:25:00Z",
   "source_parent_sha": "1b94bbdd58afb973456f78a6a7bc412906caf13e",
+  "implementation_sha": "66ca8669e63b4df95f2209803486ca9fbdc2ebf7",
   "frozen_core": {
     "tag": "xv12-core-frozen-v1",
     "sha": "1b94bbdd58afb973456f78a6a7bc412906caf13e",
