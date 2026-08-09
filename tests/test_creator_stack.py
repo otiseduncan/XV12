@@ -37,7 +37,10 @@ def test_creator_registry_permissions_and_health_are_truthful(client):
     assert required <= ids
     health = client.get("/api/health").json()["services"]["creator"]
     assert health["job_manager"] == "available" and health["sandbox"] == "available"
-    assert health["image_provider"] == "xoduz-local-design"
+    assert health["image_provider"] == "unavailable"
+    assert health["design_provider"] == "xoduz-local-design"
+    assert health["image_provider_status"]["status"] == "disabled"
+    assert health["realistic_fallback_to_design"] is False
     assert health["secret_values_exposed"] is False
 
 
@@ -126,7 +129,7 @@ def test_actual_builder_application_sandbox_preview_browser_and_archive(client):
 def test_image_edit_video_job_and_parent_artifact_continuity(client):
     login(client, "admin")
     conversation = create_conversation(client)
-    image = call(client, "media.image.generate", prompt="A cinematic electric service scheduling command center", title="Scheduling concept", width=960, height=540, conversation_id=conversation["id"])
+    image = call(client, "media.image.generate", prompt="A cinematic electric service scheduling command center", provider="design", title="Scheduling concept", width=960, height=540, conversation_id=conversation["id"])
     assert image["actual_generation"] is True and image["artifact"]["type"] == "image"
     edited = call(client, "media.image.edit", source_artifact_id=image["artifact"]["id"], prompt="Add luminous teal status details", conversation_id=conversation["id"])
     assert edited["artifact"]["parent_artifact_id"] == image["artifact"]["id"]

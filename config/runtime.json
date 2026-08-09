@@ -21,6 +21,21 @@
     "attachments": "data/attachments",
     "adas_database": "data/knowledge/adas_knowledge.sqlite"
   },
+  "media": {
+    "image": {
+      "enabled": true,
+      "provider_priority": ["comfyui-photorealistic", "xoduz-local-design"],
+      "root": "X:\\AI_Runtimes\\ComfyUI_windows_portable",
+      "port": 8188,
+      "base_url": "http://127.0.0.1:8188",
+      "checkpoint": "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
+      "default_width": 1024,
+      "default_height": 1024,
+      "timeout_seconds": 300,
+      "output_path": "data/capabilities/creator/media/comfyui",
+      "realistic_fallback_to_design": false
+    }
+  },
   "versions": {
     "database_schema": 3,
     "migration": "0003_voice_output_settings",

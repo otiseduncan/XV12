@@ -298,15 +298,21 @@
       "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 5, "health": "available", "execution_environment": "xv12-secrets-broker", "idempotency": "safe"
     },
     {
+      "id": "media.image.status", "family": "media", "family_label": "Media Creation", "family_description": "Provider-neutral image and video creation with durable chat artifacts.",
+      "description": "Read truthful ComfyUI photorealistic-provider and local design-provider health, configuration, checkpoint, size, and fallback policy without exposing secrets.", "version": "1.0.0", "risk_tier": 0, "platform_service": true, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "properties": {}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 10, "health": "dynamic", "execution_environment": "provider-neutral-media", "idempotency": "safe"
+    },
+    {
       "id": "media.image.generate", "family": "media", "family_label": "Media Creation", "family_description": "Provider-neutral image and video creation with durable chat artifacts.",
-      "description": "Generate an actual prompt-driven visual with the configured image provider and return an inline image artifact.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
-      "arguments_schema": {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}, "title": {"type": "string"}, "width": {"type": "integer", "minimum": 256, "maximum": 2048}, "height": {"type": "integer", "minimum": 256, "maximum": 2048}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
-      "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 30, "health": "available", "execution_environment": "provider-neutral-media", "idempotency": "creates-artifact"
+      "description": "Generate an actual prompt-driven image. Auto selection uses ComfyUI for ordinary realistic scenes and the local design provider only for explicit logo, icon, poster, vector, diagram, or similar design requests. Never silently downgrade an unavailable realistic request to a poster.", "version": "1.1.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}, "provider": {"type": "string", "enum": ["auto", "comfyui", "design"]}, "title": {"type": "string"}, "width": {"type": "integer", "minimum": 256, "maximum": 2048}, "height": {"type": "integer", "minimum": 256, "maximum": 2048}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 360, "health": "dynamic", "execution_environment": "provider-neutral-media", "idempotency": "creates-artifact"
     },
     {
       "id": "media.image.edit", "family": "media", "family_label": "Media Creation", "family_description": "Provider-neutral image and video creation with durable chat artifacts.",
-      "description": "Create a new edited image from an owned source image artifact while preserving parent linkage and the original.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
-      "arguments_schema": {"type": "object", "required": ["source_artifact_id", "prompt"], "properties": {"source_artifact_id": {"type": "string"}, "prompt": {"type": "string"}, "title": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "description": "Create a new edited image from an owned source artifact while preserving parent linkage and the original. ComfyUI image-to-image is not configured; ComfyUI sources fail truthfully unless the caller explicitly requests the design composition provider.", "version": "1.1.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["source_artifact_id", "prompt"], "properties": {"source_artifact_id": {"type": "string"}, "prompt": {"type": "string"}, "provider": {"type": "string", "enum": ["auto", "comfyui", "design"]}, "title": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
       "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]}, "timeout_seconds": 30, "health": "available", "execution_environment": "provider-neutral-media", "idempotency": "creates-derived-artifact"
     },
     {

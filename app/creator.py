@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from .artifacts import ArtifactStore, active_conversation_id
 from .auth import current_user
+from .comfyui import ComfyUIConfig, ComfyUIProvider
 
 
 FINAL_JOB_STATES = {"succeeded", "failed", "cancelled"}
@@ -813,10 +814,13 @@ class GitService:
 class MediaService:
     """Provider-neutral media facade with a real credential-free local design/video provider."""
 
-    def __init__(self, store: CreatorStore, jobs: JobManager, artifacts: ArtifactStore) -> None:
+    DESIGN_CUES = ("logo", "icon", "poster", "vector", "diagram", "infographic", "badge", "wordmark", "typography", "brand mark", "flat design")
+
+    def __init__(self, store: CreatorStore, jobs: JobManager, artifacts: ArtifactStore, settings: Any) -> None:
         self.store, self.jobs, self.artifacts = store, jobs, artifacts
         self.media_root = (store.path.parent / "media").resolve()
         self.media_root.mkdir(parents=True, exist_ok=True)
+        self.comfyui = ComfyUIProvider(ComfyUIConfig.from_settings(settings))
         self.ffmpeg = shutil.which("ffmpeg")
         if not self.ffmpeg:
             candidates = list(Path.home().glob("AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg*/ffmpeg-*/bin/ffmpeg.exe"))
@@ -831,6 +835,29 @@ class MediaService:
         path = self.media_root / _digest(user_id)[:20]
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def _comfy_user_dir(self, user_id: str) -> Path:
+        path = self.comfyui.config.output_path / _digest(user_id)[:20]
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @classmethod
+    def select_image_provider(cls, prompt: str, requested: str = "auto") -> tuple[str, str]:
+        requested = str(requested or "auto").casefold()
+        if requested == "design":
+            return "xoduz-local-design", "explicit_design_provider"
+        if requested == "comfyui":
+            return "comfyui-photorealistic", "explicit_comfyui_provider"
+        text = prompt.casefold()
+        if any(cue in text for cue in cls.DESIGN_CUES):
+            return "xoduz-local-design", "design_request"
+        return "comfyui-photorealistic", "realistic_scene_default"
+
+    def image_status(self, _arguments: dict[str, Any], _user: dict[str, Any]) -> dict[str, Any]:
+        comfy = self.comfyui.status()
+        return {"status": "success", "default_realistic_provider": "comfyui-photorealistic",
+                "design_provider": {"provider": "xoduz-local-design", "status": "healthy"},
+                "comfyui": comfy, "realistic_fallback_to_design": False}
 
     @staticmethod
     def _svg(prompt: str, width: int, height: int, source_data: str = "") -> str:
@@ -853,6 +880,29 @@ class MediaService:
 
     def generate_image(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         prompt = str(arguments["prompt"])
+        provider, selection_reason = self.select_image_provider(prompt, str(arguments.get("provider") or "auto"))
+        if provider == "comfyui-photorealistic":
+            status = self.comfyui.status()
+            if not status["healthy"]:
+                return {"status": "unavailable", "provider": provider, "selected_because": selection_reason,
+                        "message": "Photorealistic image generation is unavailable because the configured ComfyUI provider is not healthy. No design-poster fallback was used.",
+                        "provider_status": status, "fallback_used": False}
+            try:
+                path, metadata = self.comfyui.generate(
+                    prompt, self._comfy_user_dir(user["id"]), width=arguments.get("width"), height=arguments.get("height"),
+                )
+            except Exception as error:
+                return {"status": "execution_error", "provider": provider, "selected_because": selection_reason,
+                        "message": "ComfyUI failed before a valid image artifact was produced.",
+                        "error": type(error).__name__, "fallback_used": False}
+            artifact = self.artifacts.register_file(
+                user_id=user["id"], capability_id="media.image.generate", source_path=path,
+                title=str(arguments.get("title") or "Generated image"), source_label="XV12 ComfyUI photorealistic provider",
+                conversation_id=self._conversation(arguments), artifact_type="image", actions=["view", "download"],
+                metadata={**metadata, "selected_because": selection_reason, "fallback_used": False},
+            )
+            return {"status": "success", "provider": provider, "selected_because": selection_reason,
+                    "actual_generation": True, "fallback_used": False, "artifact": artifact}
         width, height = min(max(int(arguments.get("width") or 1280), 256), 2048), min(max(int(arguments.get("height") or 720), 256), 2048)
         path = self._user_dir(user["id"]) / f"image-{uuid.uuid4().hex}.svg"
         path.write_text(self._svg(prompt, width, height), encoding="utf-8")
@@ -860,21 +910,29 @@ class MediaService:
             user_id=user["id"], capability_id="media.image.generate", source_path=path,
             title=str(arguments.get("title") or "Generated image"), source_label="XODUZ built-in design provider",
             conversation_id=self._conversation(arguments), artifact_type="image", actions=["view", "download"],
-            metadata={"provider": "xoduz-local-design", "width": width, "height": height, "prompt_sha256": _digest(prompt), "actual_generation": True},
+            metadata={"provider": "xoduz-local-design", "width": width, "height": height, "prompt_sha256": _digest(prompt), "actual_generation": True,
+                      "selected_because": selection_reason, "fallback_used": False},
         )
-        return {"status": "success", "provider": "xoduz-local-design", "actual_generation": True, "artifact": artifact}
+        return {"status": "success", "provider": "xoduz-local-design", "selected_because": selection_reason,
+                "actual_generation": True, "fallback_used": False, "artifact": artifact}
 
     def edit_image(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         source = self.artifacts.get_owned(str(arguments["source_artifact_id"]), user["id"])
         if not source or not str(source.get("mime_type") or "").startswith("image/"):
             return {"status": "no_result", "message": "Owned source image artifact not found."}
+        source_metadata = json.loads(source.get("metadata_json") or "{}")
+        requested_provider = str(arguments.get("provider") or "auto").casefold()
+        if source_metadata.get("provider") == "comfyui-photorealistic" and requested_provider != "design":
+            return {"status": "unavailable", "provider": "comfyui-photorealistic",
+                    "message": "ComfyUI image-to-image editing is not configured in this release. The original image was preserved; no design fallback was applied.",
+                    "source_artifact_id": source["id"], "fallback_used": False}
         source_path = Path(str(source["source_path"]))
         mime = str(source["mime_type"])
         encoded = base64.b64encode(source_path.read_bytes()).decode()
         data_uri = f"data:{mime};base64,{encoded}"
         prompt = str(arguments["prompt"])
-        width = int(json.loads(source.get("metadata_json") or "{}").get("width") or 1280)
-        height = int(json.loads(source.get("metadata_json") or "{}").get("height") or 720)
+        width = int(source_metadata.get("width") or 1280)
+        height = int(source_metadata.get("height") or 720)
         path = self._user_dir(user["id"]) / f"image-edit-{uuid.uuid4().hex}.svg"
         path.write_text(self._svg(prompt, width, height, data_uri), encoding="utf-8")
         artifact = self.artifacts.register_file(
@@ -883,7 +941,7 @@ class MediaService:
             conversation_id=self._conversation(arguments), artifact_type="image", parent_artifact_id=str(source["id"]), actions=["view", "download"],
             metadata={"provider": "xoduz-local-design", "width": width, "height": height, "prompt_sha256": _digest(prompt), "actual_edit": True},
         )
-        return {"status": "success", "provider": "xoduz-local-design", "actual_edit": True, "artifact": artifact,
+        return {"status": "success", "provider": "xoduz-local-design", "actual_edit": True, "fallback_used": False, "artifact": artifact,
                 "source_artifact_id": source["id"]}
 
     def _source_png(self, source: dict[str, Any], target: Path) -> None:
@@ -947,7 +1005,7 @@ class MediaService:
 
 
 class CreatorPlatform:
-    def __init__(self, data_root: Path, artifacts: ArtifactStore) -> None:
+    def __init__(self, data_root: Path, artifacts: ArtifactStore, settings: Any) -> None:
         self.store = CreatorStore(data_root / "creator.sqlite", data_root / "workspaces")
         self.store.initialize()
         self.jobs = JobManager(self.store)
@@ -958,7 +1016,7 @@ class CreatorPlatform:
         self.preview_reconciliation = self.previews.reconcile()
         self.browser = BrowserService(self.store, artifacts)
         self.git = GitService(self.store, artifacts)
-        self.media = MediaService(self.store, self.jobs, artifacts)
+        self.media = MediaService(self.store, self.jobs, artifacts, settings)
 
     def register(self, gateway: Any) -> None:
         handlers = {
@@ -972,7 +1030,7 @@ class CreatorPlatform:
             "builder.preview.stop": self.previews.stop, "browser.preview.inspect": self.browser.inspect,
             "browser.preview.screenshot": self.browser.screenshot, "git.status": self.git.status,
             "git.diff": self.git.diff, "git.commit": self.git.commit, "git.pull": self.git.pull, "git.push": self.git.push,
-            "media.image.generate": self.media.generate_image, "media.image.edit": self.media.edit_image,
+            "media.image.status": self.media.image_status, "media.image.generate": self.media.generate_image, "media.image.edit": self.media.edit_image,
             "media.video.generate": self.media.generate_video,
         }
         for capability_id, handler in handlers.items():
@@ -987,10 +1045,14 @@ class CreatorPlatform:
         return {"status": "success", "job": CreatorStore.job_public(item)} if item else {"status": "no_result", "message": "Job not found."}
 
     def health(self) -> dict[str, Any]:
+        image = self.media.comfyui.status()
         return {
             "status": "available", "job_manager": "available", "sandbox": "available" if SandboxService.available() else "unavailable",
             "browser": "available" if self.browser.browser else "unavailable",
-            "image_provider": "xoduz-local-design", "video_provider": "xoduz-local-ffmpeg" if self.media.ffmpeg else "unavailable",
+            "image_provider": "comfyui-photorealistic" if image["healthy"] else "unavailable",
+            "image_provider_status": image, "design_provider": "xoduz-local-design",
+            "realistic_fallback_to_design": False,
+            "video_provider": "xoduz-local-ffmpeg" if self.media.ffmpeg else "unavailable",
             "secret_values_exposed": False,
         }
 

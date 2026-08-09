@@ -48,6 +48,7 @@ def make_settings(tmp_path: Path, *, auth_mode: str = "test") -> Settings:
         owner_google_sub="test-admin-sub",
         cookie_secure=False,
         session_ttl_seconds=3600,
+        comfyui_enabled=False,
     )
 
 

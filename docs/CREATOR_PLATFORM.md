@@ -23,7 +23,7 @@ The 4.0.0 registry adds:
 - Browser validation: `browser.preview.inspect`, `browser.preview.screenshot`.
 - Git: `git.status`, `git.diff`, `git.commit`, `git.pull`, `git.push`.
 - Secrets: `secrets.reference.configure`, `secrets.reference.status`.
-- Media: `media.image.generate`, `media.image.edit`, `media.video.generate`.
+- Media: `media.image.status`, `media.image.generate`, `media.image.edit`, `media.video.generate`.
 
 Every operation still passes through registry schema validation, role/risk authorization, user ownership checks, and the Capability Gateway evidence contract.
 
@@ -42,7 +42,11 @@ Only bounded summaries enter ordinary chat. Full receipts remain protected artif
 
 ## Providers
 
-`xoduz-local-design` is the default credential-free image provider. It creates actual prompt-derived SVG graphic-design assets and supports derived edits that preserve parent artifact IDs. It does not claim photorealism or diffusion-model behavior.
+`comfyui-photorealistic` is the default provider for ordinary image and realistic-scene requests. It submits a native txt2img workflow to the configured loopback ComfyUI API, verifies the configured checkpoint, downloads the actual output, and registers it as a protected inline/downloadable chat image with checkpoint, seed, dimensions, workflow, and provider provenance.
+
+`xoduz-local-design` remains a credential-free SVG provider for explicit logo, icon, poster, vector, diagram, wordmark, and similar graphic-design requests. Provider selection can be overridden with `provider=comfyui` or `provider=design`. An unhealthy ComfyUI service never silently downgrades a realistic request to this provider.
+
+ComfyUI image-to-image editing is not configured in this release. Automatic or explicit ComfyUI edits return a truthful unavailable result and create no artifact. A caller may explicitly choose the design provider for a derived SVG composition that preserves parent artifact IDs.
 
 `xoduz-local-ffmpeg` is the default video provider when FFmpeg is installed. It renders the owned source image, encodes an H.264 MP4 in a background job, reports progress, supports cancellation state, and returns a playable video artifact linked to its source image. When FFmpeg or Chromium is absent, capability health/result truthfully reports unavailable/failure.
 
@@ -73,12 +77,13 @@ Backup the Creator SQLite database with SQLite's backup API and copy the Creator
 
 ## Validation
 
-`tests/test_creator_stack.py` behaviorally verifies registry/health truth, user ownership, path traversal blocking, atomic batches, secret non-disclosure, Docker isolation, explicit network policy, actual application build/test/preview, Chromium DOM/console/runtime/network/click inspection and screenshot, project download, actual image/edit lineage, asynchronous playable video generation, cooperative cancellation, job/preview restart reconciliation, Git status/diff/commit/push/pull, and a real chat tool loop that builds then edits and retests the same workspace.
+`tests/test_creator_stack.py` behaviorally verifies registry/health truth, user ownership, path traversal blocking, atomic batches, secret non-disclosure, Docker isolation, explicit network policy, actual application build/test/preview, Chromium DOM/console/runtime/network/click inspection and screenshot, project download, design image/edit lineage, asynchronous playable video generation, cooperative cancellation, job/preview restart reconciliation, Git status/diff/commit/push/pull, and a real chat tool loop that builds then edits and retests the same workspace. `tests/test_comfyui_integration.py` verifies ComfyUI configuration, API health/checkpoint checks, workflow submission, output download, artifact registration, provider selection, truthful failure, and launcher ownership contracts.
 
 Run:
 
 ```powershell
 runtime\python\Scripts\python.exe -m pytest tests\test_creator_stack.py -q
+runtime\python\Scripts\python.exe -m pytest tests\test_comfyui_integration.py -q
 runtime\python\Scripts\python.exe -m pytest -q
 runtime\python\Scripts\python.exe scripts\check-core-guard.py
 ```

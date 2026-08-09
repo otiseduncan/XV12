@@ -47,6 +47,15 @@ class Settings:
     calibration_iq_base_url: str = "http://127.0.0.1:8084/api/v1/tools/v1/calibration-iq"
     calibration_iq_project_path: Path = Path(r"X:\calibration iq")
     web_timeout_seconds: int = 20
+    comfyui_enabled: bool = True
+    comfyui_root: Path = Path(r"X:\AI_Runtimes\ComfyUI_windows_portable")
+    comfyui_port: int = 8188
+    comfyui_base_url: str = "http://127.0.0.1:8188"
+    comfyui_checkpoint: str = "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
+    comfyui_default_width: int = 1024
+    comfyui_default_height: int = 1024
+    comfyui_timeout_seconds: int = 300
+    comfyui_output_path: Path = ROOT / "data" / "capabilities" / "creator" / "media" / "comfyui"
 
     @property
     def model_base_url(self) -> str:
@@ -58,6 +67,8 @@ class Settings:
         app = data["application"]
         model = data["model"]
         storage = data["storage"]
+        image = (data.get("media") or {}).get("image") or {}
+        comfy_port = int(os.getenv("XV12_COMFYUI_PORT", image.get("port", 8188)))
         auth_mode = os.getenv("XV12_AUTH_MODE", "google").strip().lower()
         owner_sub = os.getenv("XV12_OWNER_GOOGLE_SUB", "").strip()
         if not owner_sub:
@@ -88,4 +99,13 @@ class Settings:
                 os.getenv("XV12_CALIBRATION_IQ_PROJECT_PATH", r"X:\calibration iq")
             ),
             web_timeout_seconds=int(os.getenv("XV12_WEB_TIMEOUT_SECONDS", "20")),
+            comfyui_enabled=os.getenv("XV12_COMFYUI_ENABLED", str(image.get("enabled", True))).strip().casefold() not in {"0", "false", "no", "off"},
+            comfyui_root=Path(os.getenv("XV12_COMFYUI_ROOT", image.get("root", r"X:\AI_Runtimes\ComfyUI_windows_portable"))),
+            comfyui_port=comfy_port,
+            comfyui_base_url=os.getenv("XV12_COMFYUI_BASE_URL", image.get("base_url", f"http://127.0.0.1:{comfy_port}")),
+            comfyui_checkpoint=os.getenv("XV12_COMFYUI_CHECKPOINT", image.get("checkpoint", "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors")),
+            comfyui_default_width=int(os.getenv("XV12_COMFYUI_DEFAULT_WIDTH", image.get("default_width", 1024))),
+            comfyui_default_height=int(os.getenv("XV12_COMFYUI_DEFAULT_HEIGHT", image.get("default_height", 1024))),
+            comfyui_timeout_seconds=int(os.getenv("XV12_COMFYUI_TIMEOUT_SECONDS", image.get("timeout_seconds", 300))),
+            comfyui_output_path=ROOT / os.getenv("XV12_COMFYUI_OUTPUT_PATH", image.get("output_path", "data/capabilities/creator/media/comfyui")),
         )

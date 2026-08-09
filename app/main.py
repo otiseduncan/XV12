@@ -108,7 +108,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         [settings.root, Path(r"X:\ADAS SI"), settings.calibration_iq_project_path, capability_data / "creator"],
     )
     artifact_store.initialize()
-    creator_platform = CreatorPlatform(capability_data / "creator", artifact_store)
+    creator_platform = CreatorPlatform(capability_data / "creator", artifact_store, settings)
 
     def filter_model_tools(items: list[dict[str, Any]], user: dict[str, Any]) -> list[dict[str, Any]]:
         conversation_id = active_conversation_id()

@@ -60,11 +60,11 @@ X can create and edit prompt-driven images, turn an owned image artifact into a 
 
 Creator outputs use the generic chat artifact renderer: images and screenshots display inline, videos have native playback, applications render as sandboxed previews, job cards poll persisted progress and support cancellation, and reports/archives/Git receipts remain downloadable. Normal chat shows bounded summaries rather than raw container or process details.
 
-The built-in `xoduz-local-design` provider creates real vector design assets without credentials. It is intentionally a graphic-design provider, not a photorealistic diffusion model. The local video provider uses FFmpeg and reports unavailable if FFmpeg is absent. Secret values are supplied only through externally configured environment variables and opaque references; values are never accepted by the registry, returned to the model, stored in artifact metadata, or written unredacted to execution receipts.
+The `comfyui-photorealistic` provider uses the configured loopback ComfyUI runtime and Juggernaut XL checkpoint for ordinary realistic image requests. The built-in `xoduz-local-design` provider handles explicit logo, icon, poster, vector, diagram, and similar design requests. If ComfyUI is unavailable, realistic requests fail truthfully and are never silently replaced by a design poster. The local video provider uses FFmpeg and reports unavailable if FFmpeg is absent. Secret values are supplied only through externally configured environment variables and opaque references; values are never accepted by the registry, returned to the model, stored in artifact metadata, or written unredacted to execution receipts.
 
 Builder execution has no host shell. Commands run as argv inside a resource-limited Docker container with only the owned workspace mounted, Docker capabilities dropped, `no-new-privileges`, and networking disabled unless the capability call explicitly enables it. Git commit/pull/push and secret-reference configuration remain administrator-only through the registry role ceiling.
 
-See `docs/CREATOR_PLATFORM.md` for capability, provider, permission, recovery, cleanup, and test details.
+See `docs/CREATOR_PLATFORM.md` and `docs/COMFYUI_IMAGE_PROVIDER.md` for capability, provider, lifecycle, permission, recovery, cleanup, and test details.
 
 ## Validation
 
