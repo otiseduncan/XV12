@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import sqlite3
+from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
+from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.algorithms import RSAAlgorithm
 
+import app.auth as auth_module
+from app.auth import verify_google_id_token
 from app.main import create_app
 from .conftest import login, make_settings
 
@@ -29,6 +39,57 @@ def test_production_google_start_has_state_nonce_and_correct_redirect(tmp_path):
     assert location.startswith("https://accounts.google.com/o/oauth2/v2/auth?")
     assert "state=" in location and "nonce=" in location
     assert "scope=openid+email+profile" in location
+    state = parse_qs(urlparse(location).query)["state"][0]
+    assert application.state.store.consume_oidc_attempt(state)
+    assert application.state.store.consume_oidc_attempt(state) is None
+
+
+@pytest.mark.auth
+def test_google_id_token_cryptography_issuer_audience_and_nonce(monkeypatch, tmp_path):
+    settings = make_settings(tmp_path, auth_mode="google")
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
+    jwk["kid"] = "google-test-key"
+    now = datetime.now(UTC)
+    claims = {
+        "iss": "https://accounts.google.com",
+        "aud": settings.google_client_id,
+        "sub": "google-user-123",
+        "email": "verified@example.test",
+        "email_verified": True,
+        "name": "Verified User",
+        "nonce": "single-use-nonce",
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=5)).timestamp()),
+    }
+    token = jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": jwk["kid"]})
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"keys": [jwk]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url):
+            assert url == "https://www.googleapis.com/oauth2/v3/certs"
+            return FakeResponse()
+
+    monkeypatch.setattr(auth_module.httpx, "AsyncClient", FakeClient)
+    verified = asyncio.run(verify_google_id_token(token, "single-use-nonce", settings))
+    assert verified["sub"] == "google-user-123"
+    with pytest.raises(HTTPException, match="nonce"):
+        asyncio.run(verify_google_id_token(token, "replayed-nonce", settings))
 
 
 @pytest.mark.authorization

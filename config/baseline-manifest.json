@@ -1,6 +1,6 @@
 ﻿{
     "baseline":  "XODUZ XV12 Baseline 1",
-    "generated_at":  "2026-08-09T06:02:58.0726337-04:00",
+    "generated_at":  "2026-08-09T06:04:14.9133712-04:00",
     "tag":  "xv12-baseline-core-v1",
     "model":  {
                   "filename":  "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
@@ -90,7 +90,7 @@
     "validation":  {
                        "regression":  {
                                           "result":  "PASS",
-                                          "passed":  17
+                                          "passed":  18
                                       },
                        "acceptance":  {
                                           "result":  "PASS",
