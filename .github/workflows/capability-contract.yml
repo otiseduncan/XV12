@@ -39,4 +39,5 @@ jobs:
           tests/test_capability_extensions.py
           tests/test_builder_execution_session.py
           tests/test_builder_active_job_dedupe.py
+          tests/test_builder_artifact_handoff.py
           tests/test_voice_output.py
