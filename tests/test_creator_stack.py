@@ -76,11 +76,13 @@ def test_secret_references_never_disclose_values_and_sandbox_redacts(app, client
     workspace = call(client, "builder.workspace.create", name="Secret boundary")["workspace"]
     receipt = call(
         client, "builder.sandbox.exec", workspace_id=workspace["id"],
-        argv=["sh", "-lc", "printf '%s' \"$BUILD_TOKEN\""], secret_refs=["build_token"],
+        argv=["sh", "-lc", "printf '%s' \"$BUILD_TOKEN\"; test -z \"$XV12_TEST_CREATOR_TOKEN\""], secret_refs=["build_token"],
         timeout_seconds=30, report_type="test_report", conversation_id=conversation["id"],
     )
     assert receipt["executed"] is True and secret not in json.dumps(receipt)
     assert receipt["artifact"]["metadata"]["secret_values_exposed"] is False
+    full_log = client.get(receipt["artifact"]["reference"])
+    assert full_log.status_code == 200 and secret not in full_log.text and "[REDACTED]" in full_log.text
 
 
 def test_actual_builder_application_sandbox_preview_browser_and_archive(client):
@@ -94,6 +96,14 @@ def test_actual_builder_application_sandbox_preview_browser_and_archive(client):
         {"path": "test_app.py", "content": "from pathlib import Path\nimport unittest\nclass AppTest(unittest.TestCase):\n def test_contract(self):\n  text=Path('index.html').read_text()\n  self.assertIn('Customer Scheduling Console',text)\n  self.assertIn('Book appointment',text)\nif __name__=='__main__': unittest.main()\n"},
     ]
     assert call(client, "builder.files.batch", workspace_id=workspace["id"], files=files)["files_written"] == 4
+    isolated = call(client, "builder.sandbox.exec", workspace_id=workspace["id"],
+                    argv=["sh", "-lc", "test -f index.html && test ! -e /var/run/docker.sock && test ! -e /host && test ! -e /repo && test ! -e /other && test ! -e /sys/class/net/eth0"],
+                    timeout_seconds=30, conversation_id=conversation["id"])
+    assert isolated["exit_code"] == 0 and isolated["sandbox"]["workspace_only_mount"] is True
+    networked = call(client, "builder.sandbox.exec", workspace_id=workspace["id"],
+                    argv=["sh", "-lc", "test -e /sys/class/net/eth0"], network=True,
+                    timeout_seconds=30, conversation_id=conversation["id"])
+    assert networked["exit_code"] == 0 and networked["sandbox"]["network"] == "enabled"
     tested = call(client, "builder.sandbox.exec", workspace_id=workspace["id"], argv=["python", "-m", "unittest", "-v"], report_type="test_report", timeout_seconds=60, conversation_id=conversation["id"])
     assert tested["exit_code"] == 0 and tested["artifact"]["type"] == "test_report"
     preview = call(client, "builder.preview.start", workspace_id=workspace["id"], title="Customer scheduling application", conversation_id=conversation["id"])
@@ -138,3 +148,69 @@ def test_job_restart_reconciliation_is_persisted(tmp_path: Path):
     CreatorStore(tmp_path / "creator.sqlite", tmp_path / "workspaces").initialize()
     recovered = store.job(queued["id"], "user")
     assert recovered and recovered["state"] == "failed" and recovered["error_code"] == "service_restarted"
+
+
+def test_chat_builds_and_then_edits_the_same_application_workspace(app, client):
+    class BuilderConversationModel:
+        workspace_id = ""
+
+        async def health(self):
+            return {"reachable": True, "alias_ok": True, "models": ["xoduz-qwen3-coder-30b"]}
+
+        async def stream_events(self, messages, tools=None):
+            prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
+            tool_messages = [item for item in messages if item["role"] == "tool"]
+            current_tools = tool_messages[-3:]
+            if "change" in prompt.casefold():
+                if not current_tools:
+                    yield {"type": "tool_call", "id": "edit", "name": "builder_files_patch", "arguments": json.dumps({
+                        "workspace_id": self.workspace_id, "path": "styles.css", "content": "body{background:#021018;color:#fff;font-family:system-ui}main{max-width:980px;margin:6vh auto;padding:48px}button{background:#ff9f43;padding:14px;border:0;border-radius:12px}",
+                    })}
+                    yield {"type": "tool_call", "id": "retest", "name": "builder_sandbox_exec", "arguments": json.dumps({
+                        "workspace_id": self.workspace_id, "argv": ["python", "-m", "unittest", "-v"], "report_type": "test_report", "conversation_id": conversation["id"],
+                    })}
+                else:
+                    yield {"type": "content", "text": f"I updated and retested the existing application in workspace {self.workspace_id}."}
+                return
+            if not tool_messages:
+                yield {"type": "tool_call", "id": "workspace", "name": "builder_workspace_create", "arguments": '{"name":"Chat scheduling application"}'}
+            elif not self.workspace_id:
+                created = json.loads(tool_messages[-1]["content"])
+                self.workspace_id = created["workspace"]["id"]
+                yield {"type": "tool_call", "id": "files", "name": "builder_files_batch", "arguments": json.dumps({
+                    "workspace_id": self.workspace_id, "files": [
+                        {"path": "index.html", "content": "<html><head><title>Chat Scheduling App</title><link rel='stylesheet' href='styles.css'></head><body><main><h1>Chat Scheduling App</h1><button>Schedule customer</button></main></body></html>"},
+                        {"path": "styles.css", "content": "body{background:#07141a;color:#dff;font-family:system-ui}main{padding:40px}"},
+                        {"path": "test_app.py", "content": "from pathlib import Path\nimport unittest\nclass T(unittest.TestCase):\n def test_title(self): self.assertIn('Chat Scheduling App',Path('index.html').read_text())\n"},
+                    ],
+                })}
+                yield {"type": "tool_call", "id": "tests", "name": "builder_sandbox_exec", "arguments": json.dumps({
+                    "workspace_id": self.workspace_id, "argv": ["python", "-m", "unittest", "-v"], "report_type": "test_report", "conversation_id": conversation["id"],
+                })}
+                yield {"type": "tool_call", "id": "preview", "name": "builder_preview_start", "arguments": json.dumps({
+                    "workspace_id": self.workspace_id, "title": "Chat scheduling application", "conversation_id": conversation["id"],
+                })}
+            else:
+                yield {"type": "content", "text": f"I built, tested, and started the application in workspace {self.workspace_id}."}
+
+    login(client, "admin")
+    conversation = create_conversation(client)
+    model = BuilderConversationModel()
+    app.state.model = model
+    response = client.post(f"/api/conversations/{conversation['id']}/stream", json={"message": "Build me a customer scheduling web application."})
+    assert response.status_code == 200 and "event: error" not in response.text
+    stored = client.get(f"/api/conversations/{conversation['id']}").json()
+    cards = stored["messages"][-1]["metadata"]["capability_cards"]
+    assert [card["capability_id"] for card in cards] == ["builder.workspace.create", "builder.files.batch", "builder.sandbox.exec", "builder.preview.start"]
+    preview_id = cards[-1]["result"]["preview"]["id"]
+    assert cards[-1]["result"]["artifact"]["type"] == "application"
+    try:
+        follow_up = client.post(f"/api/conversations/{conversation['id']}/stream", json={"message": "Change the accent to orange and rerun the tests."})
+        assert follow_up.status_code == 200 and "event: error" not in follow_up.text
+        stored = client.get(f"/api/conversations/{conversation['id']}").json()
+        edit_cards = stored["messages"][-1]["metadata"]["capability_cards"]
+        assert [card["capability_id"] for card in edit_cards] == ["builder.files.patch", "builder.sandbox.exec"]
+        assert edit_cards[-1]["result"]["exit_code"] == 0
+        assert model.workspace_id in stored["messages"][-1]["content"]
+    finally:
+        call(client, "builder.preview.stop", preview_id=preview_id)

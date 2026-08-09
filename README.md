@@ -1,6 +1,6 @@
 # XODUZ XV12 Functional Assistant Baseline
 
-XV12 is a standalone, local-first XODUZ application. The functional baseline preserves the fast model-first conversation core and adds a permanent bounded shell, trusted conversational identity, optional project context, independent voice dictation and spoken output, live current-information search, verified ADAS knowledge, authenticated Calibration IQ reads, and an admin-only allowlisted Calibration IQ start action.
+XV12 is a standalone, local-first XODUZ application. The functional baseline preserves the fast model-first conversation core and adds a permanent bounded shell, trusted conversational identity, optional project context, independent voice dictation and spoken output, live current-information search, verified ADAS knowledge, authenticated Calibration IQ reads, an admin-only allowlisted Calibration IQ start action, and the conversation-native Creator platform.
 
 ## Start XODUZ
 
@@ -40,6 +40,7 @@ The sole administrator is bound by `XV12_OWNER_GOOGLE_SUB`. Email is profile dat
 - Independent Calibration IQ API: local scoped read-only service
 - Attachments: `data/attachments/<internal-user-id>/`
 - Operational logs: `logs/`
+- Creator state: `data/capabilities/creator/` (jobs, workspaces, previews, media, and receipts)
 
 Every path above is resolved from the XV12 repository root. The standalone audit is executable with `scripts/standalone-audit.ps1`.
 
@@ -53,6 +54,18 @@ The context order is stable identity, authenticated user, active subject, rollin
 
 Capability awareness is generated from `config/capabilities.v1.json`. Ordinary conversation remains a direct one-call stream; native model-selected tools enter a bounded function loop only when needed.
 
+## Creator platform
+
+X can create and edit prompt-driven images, turn an owned image artifact into a playable video job, build applications in durable user-scoped workspaces, execute dependencies/builds/tests in a constrained Docker sandbox, start an isolated local preview, inspect and screenshot it with Chromium, and return project archives and receipts in chat. Follow-up edits reuse stable workspace and artifact IDs.
+
+Creator outputs use the generic chat artifact renderer: images and screenshots display inline, videos have native playback, applications render as sandboxed previews, job cards poll persisted progress and support cancellation, and reports/archives/Git receipts remain downloadable. Normal chat shows bounded summaries rather than raw container or process details.
+
+The built-in `xoduz-local-design` provider creates real vector design assets without credentials. It is intentionally a graphic-design provider, not a photorealistic diffusion model. The local video provider uses FFmpeg and reports unavailable if FFmpeg is absent. Secret values are supplied only through externally configured environment variables and opaque references; values are never accepted by the registry, returned to the model, stored in artifact metadata, or written unredacted to execution receipts.
+
+Builder execution has no host shell. Commands run as argv inside a resource-limited Docker container with only the owned workspace mounted, Docker capabilities dropped, `no-new-privileges`, and networking disabled unless the capability call explicitly enables it. Git commit/pull/push and secret-reference configuration remain administrator-only through the registry role ceiling.
+
+See `docs/CREATOR_PLATFORM.md` for capability, provider, permission, recovery, cleanup, and test details.
+
 ## Validation
 
 Run every fast pack:
@@ -61,7 +74,7 @@ Run every fast pack:
 scripts\run-regression.ps1 -Pack all
 ```
 
-Focused packs include `chat-core`, `ui-shell`, `auth`, `user-identity`, `memory-isolation`, `voice`, `voice-output`, `project-context`, `capability-registry`, `web`, `databases`, `attachments`, and `launcher`.
+Focused packs include `chat-core`, `ui-shell`, `auth`, `user-identity`, `memory-isolation`, `voice`, `voice-output`, `project-context`, `capability-registry`, `web`, `databases`, `attachments`, `artifacts`, `creator`, and `launcher`.
 
 Run the live production-route acceptance checks while XV12 is running:
 
