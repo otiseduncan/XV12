@@ -1,6 +1,6 @@
 {
   "result": "PASS",
-  "executed_at": "2026-08-09T10:55:15.157993+00:00",
+  "executed_at": "2026-08-09T14:43:05.332528+00:00",
   "base_url": "http://127.0.0.1:8120",
   "authenticated_user": {
     "id": "f779a85c-5b76-47b3-95fd-edb396687257",
@@ -10,32 +10,32 @@
   "turns": [
     {
       "prompt": "Who am I?",
-      "first_token_seconds": 0.297,
-      "total_seconds": 1.0,
+      "first_token_seconds": 2.761,
+      "total_seconds": 3.702,
       "events": [
         "delta",
         "done",
         "meta"
       ],
       "capabilities": [],
-      "answer": "You are Otis, an administrator within the XV12 system. Your internal user ID is f779a85c-5b76-47b3-95fd-edb396687257. Is there something specific you'd like to know or discuss about yourself or your role?"
+      "answer": "You are Otis, an administrator within the XV12 system. Your internal user ID is f779a85c-5b76-47b3-95fd-edb396687257. You have admin privileges and are authenticated to access and manage various system functions and data. Is there something specific you'd like to know or do regarding your role or the system?"
     },
     {
       "prompt": "What local databases do you have access to?",
-      "first_token_seconds": 0.348,
-      "total_seconds": 1.336,
+      "first_token_seconds": 0.439,
+      "total_seconds": 1.958,
       "events": [
         "delta",
         "done",
         "meta"
       ],
       "capabilities": [],
-      "answer": "I have access to several local databases:\n\n1. **ADAS Knowledge Database** - Contains verified coverage inventory and procedures for ADAS systems, including information on makes, models, years, and calibration requirements.\n2. **Calibration IQ Repair Orders** - A read-only database for repair orders through the Calibration IQ API, which is currently in a dynamic state.\n\nThese databases are part of the system's registered data services and are available for querying. Is there anything specific you'd like to know from these databases?"
+      "answer": "I have access to several local databases and data services within the XV12 system. These include:\n\n1. **ADAS Knowledge Database** - Contains verified coverage inventory and procedure records for ADAS systems.\n2. **Calibration IQ** - A database for repair orders and related calibration data.\n3. **Artifact Storage** - For managing and retrieving document artifacts.\n4. **Project Registry** - For tracking user-scoped projects.\n5. **System Settings** - For managing voice and other user preferences.\n\nThese databases are integral to the system's functionality and are used to provide accurate and relevant information based on your queries. Let me know if you'd like to explore any of these further."
     },
     {
       "prompt": "How many repair orders are currently in Calibration IQ?",
-      "first_token_seconds": 1.389,
-      "total_seconds": 2.327,
+      "first_token_seconds": 2.342,
+      "total_seconds": 2.986,
       "events": [
         "capability",
         "delta",
@@ -50,7 +50,7 @@
             "limit": 1
           },
           "result": {
-            "status": "verified",
+            "status": "success",
             "count": 166,
             "returned_count": 1,
             "source_returned_count": 1,
@@ -68,12 +68,12 @@
           }
         }
       ],
-      "answer": "There are currently 166 repair orders in the Calibration IQ system. The most recent one, with the number 2400911710, is for a 2024 Kia NIRO at the Macon shop. It's currently in the \"Repair In Progress\" status and was last updated on August 7, 2026.\n\nWould you like me to look up any specific details about these repair orders?"
+      "answer": "There are currently 166 repair orders in the Calibration IQ database. The system has verified this count, and it includes detailed information about each order, such as vehicle details, status, and other relevant data. Let me know if you need further details or assistance with any specific repair order."
     },
     {
       "prompt": "What verified calibration information do you have for a 2023 Hyundai Palisade front camera after windshield replacement?",
-      "first_token_seconds": 1.364,
-      "total_seconds": 5.494,
+      "first_token_seconds": 1.895,
+      "total_seconds": 7.526,
       "events": [
         "capability",
         "delta",
@@ -88,8 +88,8 @@
             "query": "2023 Hyundai Palisade front camera calibration after windshield replacement"
           },
           "result": {
-            "authorization": "role_and_risk_allowed",
-            "status": "verified",
+            "authorization": "administrator_implicit_access",
+            "status": "success",
             "query": "2023 Hyundai Palisade front camera calibration after windshield replacement",
             "results": [
               {
@@ -135,16 +135,17 @@
               "source": "xv12_owned_adas_database",
               "verified_only": true,
               "read_only": true
-            }
+            },
+            "domain_status": "verified"
           }
         }
       ],
-      "answer": "For a 2023 Hyundai Palisade, after windshield replacement, the verified calibration information for the front camera is as follows:\n\n**Calibration Procedure:**\n- **Title:** Front Camera Adjustment (SPTAC or SPC)\n- **Type:** Static and dynamic calibration\n- **Required Status:** Required for both windshield replacement and camera replacement\n\n**Key Requirements:**\n1. **Methods:** There are two methods available - SPTAC (Static Point Target Adjustment Calibration) and SPC (Static Point Calibration). If both are selectable, perform SPTAC first; only perform SPC if SPTAC fails.\n2. **Prerequisites:**\n   - Wheel alignment and tire pressure must be normal\n   - Windshield must be clean\n   - Front camera sensor and coupler must be free of foreign substances\n   - No objects on dashboard below front camera\n3. **Vehicle Setup:**\n   - Unloaded vehicle\n   - Tires aligned forward\n   - Vehicle not tilted; suspension must be OK\n4. **Environment Setup:**\n   - Level ground for SPTAC\n   - SPC requires a straight road with both sides recognized, no fog or rain\n5. **Special Tools Required:**\n   - Front view camera calibration target (09890-3V100)\n6. **Scan Tool Requirements:**\n   - Diagnostic device for SPC/SPTAC calibration selection\n7. **Scan Tool Menu Path:**\n   - S/W Management → Front View Camera → SPC Calibration or SPTAC Calibration\n\n**Road Test Requirements:**\n- For SPC, vehicle speed over 36 km/h (22.3 mph) on a straight road with both road sides recognized; no fog or rain\n\nThis procedure ensures proper calibration of the front camera after windshield replacement. Would you like me to provide more details about any specific aspect of this calibration process?"
+      "answer": "For a 2023 Hyundai Palisade, the verified calibration information for the front camera after windshield replacement is as follows:\n\n### **Front Camera Adjustment (SPTAC or SPC)**\n\n#### **Calibration Type:**\n- Static and Dynamic\n\n#### **Requirements:**\n- **Windshield Replacement:** Use the available front-camera adjustment method. If both SPTAC and SPC are selectable, perform SPTAC first; perform SPC only if SPTAC fails.\n- **Camera Replacement:** Same procedure applies.\n\n#### **Prerequisites:**\n- Wheel alignment and tire pressure normal\n- Windshield clean\n- Front camera sensor and coupler free of foreign substance\n- No object on dashboard below front camera\n\n#### **Vehicle Setup:**\n- Unloaded vehicle\n- Tires aligned forward\n- Vehicle not tilted; suspension OK\n\n#### **Environment Setup:**\n- Level ground for SPTAC\n- SPC requires a straight road with both sides recognized and no fog or rain\n\n#### **Special Tools:**\n- Front view camera calibration target (09890-3V100)\n\n#### **Target Setup:**\n- SPTAC target (09890-3V100) uses close- and long-range target positions documented in the procedure\n\n#### **Scan Tool Requirements:**\n- Diagnostic device for SPC/SPTAC calibration selection\n\n#### **Scan Tool Menu Path:**\n- S/W Management > Front View Camera > SPC Calibration or SPTAC Calibration\n\n#### **Road Test Requirements:**\n- For SPC, vehicle speed over 36 km/h (22.3 mph) on a straight road; both road sides recognized; no fog or rain\n\n#### **Notes:**\n- If only one method is selectable between SPTAC and SPC, choose whichever is available.\n- If both are selectable, perform SPTAC first. Should SPTAC fail, perform SPC. If SPTAC is successful, do not perform SPC.\n\nThis information is sourced from the verified Hyundai Palisade (2020-25) Windshield Camera Calibration document, published on June 7, 2024. Let me know if you need further details or assistance."
     },
     {
       "prompt": "What's going on with the current conflict or skirmishes in the Middle East today? Use current evidence.",
-      "first_token_seconds": 1.9,
-      "total_seconds": 4.552,
+      "first_token_seconds": 3.069,
+      "total_seconds": 6.958,
       "events": [
         "capability",
         "delta",
@@ -160,51 +161,68 @@
             "mode": "news"
           },
           "result": {
-            "authorization": "role_and_risk_allowed",
-            "status": "verified_results",
+            "authorization": "administrator_implicit_access",
+            "status": "success",
             "query": "Middle East conflict updates today",
             "mode": "news",
-            "executed_at": "2026-08-09T10:55:07.695982+00:00",
+            "executed_at": "2026-08-09T14:42:54.175031+00:00",
             "provider": "Bing News RSS",
             "results": [
               {
-                "title": "US-Iran-Israel War Live Updates: IDF Continues Operations in Southern Lebanon as US Enters 'Final Talks' on Hormuz",
-                "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=6a785c8b674d4e80adea5ea548e80320&url=https%3a%2f%2fwww.msn.com%2fen-in%2fnews%2fother%2fus-iran-israel-war-live-updates-idf-continues-operations-in-southern-lebanon-as-us-enters-final-talks-on-hormuz%2far-AA29uEwG&c=14022937682959406403&mkt=en-us",
-                "snippet": "US-Iran-Israel War Live Updates: Follow real-time developments as diplomacy over the Strait of Hormuz gathers pace while military tensions continue across the Middle East. Stay updated on the latest ...",
-                "published_at": "Sun, 09 Aug 2026 03:33:00 GMT",
+                "title": "Middle East: Netanyahu says Israel rejects Trump's Gaza plan",
+                "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=6a7891ee62e440b096a7dabc2ac9a4ae&url=https%3a%2f%2fwww.msn.com%2fen-ca%2fnews%2fworld%2fmiddle-east-netanyahu-says-israel-rejects-trumps-gaza-plan%2far-AA29Fb74&c=12903572180042152429&mkt=en-us",
+                "snippet": "Israeli Prime Minister Benjamin Netanyahu announced Israel's rejection of US President Donald Trump's 15-point plan for Gaza. Follow DW for more.",
+                "published_at": "Sun, 09 Aug 2026 05:33:00 GMT",
                 "source": "Bing News RSS",
                 "reference": "web:1"
               },
               {
-                "title": "US Iran War News Live Updates: Iran says no direct talks with US, messages exchanged only via intermediaries",
-                "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=6a785c8b674d4e80adea5ea548e80320&url=https%3a%2f%2ftimesofindia.indiatimes.com%2fworld%2fmiddle-east%2fus-iran-war-news-live-updates-donald-trump-mojtaba-khamenei-peace-deal-strait-of-hormuz-middle-east-conflict-lebanon-infiltration-latest-news%2fliveblog%2f133062402.cms&c=13335573215645192478&mkt=en-us",
-                "snippet": "Iran crisis is entering a more complex phase in which military signalling, diplomacy and energy security are unfolding ...",
-                "published_at": "Sat, 08 Aug 2026 21:51:00 GMT",
+                "title": "US-Iran-Israel War Live Updates: IDF Continues Operations in Southern Lebanon as US Enters 'Final Talks' on Hormuz",
+                "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=6a7891ee62e440b096a7dabc2ac9a4ae&url=https%3a%2f%2fwww.msn.com%2fen-in%2fnews%2fother%2fus-iran-israel-war-live-updates-idf-continues-operations-in-southern-lebanon-as-us-enters-final-talks-on-hormuz%2far-AA29uEwG&c=14022937682959406403&mkt=en-us",
+                "snippet": "US-Iran-Israel War Live Updates: Follow real-time developments as diplomacy over the Strait of Hormuz gathers pace while military tensions continue across the Middle East. Stay updated on the latest ...",
+                "published_at": "Sun, 09 Aug 2026 05:39:00 GMT",
                 "source": "Bing News RSS",
                 "reference": "web:2"
               },
               {
+                "title": "US Iran War News Live Updates: Seven killed in strike on Yemen's Mocha port, military spokesperson reports",
+                "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=6a7891ee62e440b096a7dabc2ac9a4ae&url=https%3a%2f%2ftimesofindia.indiatimes.com%2fworld%2fmiddle-east%2fus-iran-war-news-live-updates-donald-trump-mojtaba-khamenei-peace-deal-strait-of-hormuz-middle-east-conflict-lebanon-infiltration-latest-news%2fliveblog%2f133062402.cms&c=13335573215645192478&mkt=en-us",
+                "snippet": "Iran crisis is entering a more complex phase in which military signalling, diplomacy and energy security are unfolding ...",
+                "published_at": "Sat, 08 Aug 2026 21:51:00 GMT",
+                "source": "Bing News RSS",
+                "reference": "web:3"
+              },
+              {
+                "title": "Iran: Trump’s military chiefs ‘push to speed up weapons production’",
+                "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=6a7891ee62e440b096a7dabc2ac9a4ae&url=https%3a%2f%2fwww.msn.com%2fen-us%2fnews%2fworld%2firan-trump-s-military-chiefs-push-to-speed-up-weapons-production%2far-AA29AhCF&c=11318832807537891129&mkt=en-us",
+                "snippet": "Iran-US war latest: Trump’s military chiefs ‘push to speed up weapons production’ amid Hormuz deal deadlock - UAE accused Tehran of ‘acts of piracy’ after an Iranian missile attack on its carrier thro ...",
+                "published_at": "Sun, 09 Aug 2026 02:44:37 GMT",
+                "source": "Bing News RSS",
+                "reference": "web:4"
+              },
+              {
                 "title": "Iran live: Trump military chief seeks ‘off-ramp’ from conflict",
-                "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=6a785c8b674d4e80adea5ea548e80320&url=https%3a%2f%2fwww.msn.com%2fen-gb%2fnews%2fworld%2firan-live-trump-military-chief-seeks-off-ramp-from-conflict%2far-AA29ArYd&c=12433771683183871344&mkt=en-us",
+                "url": "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=6a7891ee62e440b096a7dabc2ac9a4ae&url=https%3a%2f%2fwww.msn.com%2fen-gb%2fnews%2fworld%2firan-live-trump-military-chief-seeks-off-ramp-from-conflict%2far-AA29ArYd&c=12433771683183871344&mkt=en-us",
                 "snippet": "Iran-US war latest: Trump military chief seeks ‘off-ramp’ from conflict as Strait of Hormuz ‘hit by missile strike’ - UAE condemns attack on carrier as it accuses Tehran of ‘acts of piracy’ ...",
                 "published_at": "Sun, 09 Aug 2026 00:54:00 GMT",
                 "source": "Bing News RSS",
-                "reference": "web:3"
+                "reference": "web:5"
               }
             ],
             "evidence": {
               "executed": true,
-              "result_count": 3
-            }
+              "result_count": 5
+            },
+            "domain_status": "verified_results"
           }
         }
       ],
-      "answer": "Based on current news reports, the situation in the Middle East remains highly volatile with ongoing tensions between Iran, Israel, and the United States. Here's what's currently unfolding:\n\n**Key Developments:**\n1. **Military Operations**: Israel's IDF continues operations in southern Lebanon, while Iran has reportedly launched missile strikes near the Strait of Hormuz, which is a critical shipping route.\n\n2. **Diplomatic Efforts**: The U.S. is reportedly in \"final talks\" regarding the Strait of Hormuz, while Iran has indicated it's not willing to engage in direct talks with the U.S. and is only communicating through intermediaries.\n\n3. **Regional Impact**: The UAE has condemned an attack on a carrier and accused Tehran of \"acts of piracy,\" indicating the conflict is having broader regional implications.\n\n4. **Escalation Concerns**: There are reports that the situation is entering a more complex phase involving military signaling, diplomacy, and energy security concerns.\n\nThe conflict appears to be centered around strategic control of the Strait of Hormuz and escalating tensions between regional powers. The situation remains fluid, with military and diplomatic channels actively engaged.\n\nWould you like me to search for more specific details about any particular aspect of this conflict?"
+      "answer": "As of today, August 9, 2026, the Middle East is experiencing ongoing tensions and military activities, with several key developments:\n\n1. **Israel and the U.S. Plan for Gaza**: Israeli Prime Minister Benjamin Netanyahu has rejected a 15-point plan proposed by U.S. President Donald Trump for Gaza. This indicates continued diplomatic friction over the conflict in the region.\n\n2. **Military Operations in Lebanon**: The Israeli Defense Forces (IDF) are continuing military operations in southern Lebanon, signaling that the conflict remains active in this area.\n\n3. **U.S.-Iran Tensions**: The U.S. is reportedly entering \"final talks\" regarding the Strait of Hormuz, a critical waterway for global oil shipments. Meanwhile, Iran is escalating its military posture, with reports of missile attacks and accusations of piracy by the UAE against Iran.\n\n4. **Yemen and Regional Strikes**: A recent strike on Yemen's Mocha port resulted in seven deaths, highlighting the broader regional instability and the involvement of external powers.\n\n5. **Iran’s Military Production**: U.S. military leaders are reportedly pushing to accelerate weapons production in response to the escalating conflict, further indicating a high level of military preparedness and tension.\n\nThese developments suggest a complex and volatile situation, with military, diplomatic, and regional dimensions all contributing to the ongoing conflict. Let me know if you'd like more specific details on any of these points."
     },
     {
       "prompt": "Check your verified ADAS database for 2024 Rivian R1S front camera calibration. If it is absent, research the current public web rather than stopping at the local miss.",
-      "first_token_seconds": 1.115,
-      "total_seconds": 3.753,
+      "first_token_seconds": 1.782,
+      "total_seconds": 5.256,
       "events": [
         "capability",
         "delta",
@@ -214,18 +232,29 @@
       "capabilities": [
         {
           "status": "complete",
-          "capability_id": "adas.knowledge.search",
+          "capability_id": "adas.coverage.read",
           "arguments": {
-            "query": "2024 Rivian R1S front camera calibration"
+            "make": "Rivian",
+            "model": "R1S",
+            "year": 2024
           },
           "result": {
-            "authorization": "role_and_risk_allowed",
+            "authorization": "administrator_implicit_access",
             "status": "no_result",
-            "query": "2024 Rivian R1S front camera calibration",
-            "results": [],
+            "filters": {
+              "make": "Rivian",
+              "model": "R1S",
+              "year": 2024
+            },
+            "coverage": {
+              "documents": 76,
+              "verified_records": 6,
+              "review_items": 717,
+              "active_source_documents": 1
+            },
+            "applications": [],
             "evidence": {
               "source": "xv12_owned_adas_database",
-              "verified_only": true,
               "read_only": true
             }
           }
@@ -234,14 +263,15 @@
           "status": "complete",
           "capability_id": "web.current.search",
           "arguments": {
-            "query": "2024 Rivian R1S front camera calibration requirements"
+            "query": "2024 Rivian R1S front camera calibration procedure",
+            "mode": "current"
           },
           "result": {
-            "authorization": "role_and_risk_allowed",
+            "authorization": "administrator_implicit_access",
             "status": "no_result",
-            "query": "2024 Rivian R1S front camera calibration requirements",
+            "query": "2024 Rivian R1S front camera calibration procedure",
             "mode": "current",
-            "executed_at": "2026-08-09T10:55:13.510062+00:00",
+            "executed_at": "2026-08-09T14:43:02.860069+00:00",
             "provider": "Bing News RSS",
             "results": [],
             "evidence": {
@@ -251,7 +281,7 @@
           }
         }
       ],
-      "answer": "I don't have verified calibration information for the 2024 Rivian R1S front camera in my ADAS database. Since this is a newer model, it's possible the information hasn't been fully cataloged yet.\n\nLet me search the web for current public information about this specific calibration requirement.\nI couldn't find specific verified calibration information for the 2024 Rivian R1S front camera in either the ADAS database or through current web searches. This could be due to the vehicle being relatively new or the calibration procedures not being widely documented yet.\n\nWould you like me to try a different search approach or look into other aspects of the Rivian R1S ADAS system?"
+      "answer": "It seems that the verified ADAS database doesn't currently have specific front camera calibration information for the 2024 Rivian R1S. Let me search the web for current public information on this topic.\nIt seems that both the verified ADAS database and current web searches have not yielded specific information about the front camera calibration procedure for the 2024 Rivian R1S. This could be due to the vehicle being relatively new or the calibration procedures not being widely documented publicly yet.\n\nIf you have access to the vehicle's service manual or specific technical documentation, that would be the best source for accurate calibration details. Alternatively, reaching out to Rivian's service department or a certified technician might provide the necessary information. Let me know if there's anything else I can assist with."
     }
   ],
   "persisted_messages": 12,

@@ -42,7 +42,7 @@ def main() -> int:
     if not capability or capability.get("capability_id") != "service.calibration_iq.start":
         failures.append("model did not select the allowlisted start capability")
     result = (capability or {}).get("result") or {}
-    if result.get("status") != "started" or result.get("executed") is not True:
+    if result.get("status") != "success" or result.get("domain_status") != "started" or result.get("executed") is not True:
         failures.append("start receipt did not prove execution")
     if health.get("status") != "available":
         failures.append("Calibration IQ did not become healthy")

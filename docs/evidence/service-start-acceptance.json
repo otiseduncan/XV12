@@ -1,28 +1,29 @@
 {
   "result": "PASS",
-  "executed_at": "2026-08-09T10:47:55.132116+00:00",
+  "executed_at": "2026-08-09T14:50:16.224272+00:00",
   "prompt": "Calibration IQ is offline. Start Calibration IQ now and verify that it is healthy.",
-  "duration_seconds": 35.776,
+  "duration_seconds": 34.569,
   "capability": {
     "status": "complete",
     "capability_id": "service.calibration_iq.start",
     "arguments": {},
     "result": {
-      "authorization": "role_and_risk_allowed",
-      "status": "started",
+      "authorization": "administrator_implicit_access",
+      "status": "success",
       "executed": true,
       "command": "docker compose up -d",
       "exit_code": 0,
       "health": {
         "status": "available",
         "http_status": 200
-      }
+      },
+      "domain_status": "started"
     }
   },
   "health": {
     "status": "available",
     "http_status": 200
   },
-  "answer": "Calibration IQ is now running and its health status is available. The service started successfully with the command `docker compose up -d`, and it's currently responding with an HTTP status of 200. It's ready for use.",
+  "answer": "Calibration IQ is now running and healthy. The service started successfully with a 200 HTTP status, and its domain status is confirmed as started. Let me know if you need any further action taken on it.",
   "failures": []
 }

@@ -1,0 +1,79 @@
+{
+  "baseline": "xv12-known-good-2026-08-09",
+  "contains_secrets": false,
+  "application": {
+    "name": "XODUZ XV12",
+    "host": "127.0.0.1",
+    "port": 8120,
+    "auth_mode_at_freeze": "test",
+    "cookie_secure_at_freeze": false
+  },
+  "model": {
+    "alias": "xoduz-qwen3-coder-30b",
+    "endpoint": "http://127.0.0.1:8121/v1",
+    "port": 8121,
+    "path": "models/qwen3-coder-30b-a3b/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+    "context_tokens": 32768,
+    "max_response_tokens": 768,
+    "temperature": 0.35,
+    "gpu_layers": 99,
+    "parallel": 1
+  },
+  "storage": {
+    "database": "data/xv12.db",
+    "attachments": "data/attachments",
+    "adas_database": "data/knowledge/adas_knowledge.sqlite",
+    "artifact_database": "data/capabilities/artifacts.sqlite",
+    "permission_database": "data/capabilities/permissions.sqlite",
+    "adas_si_cache": "data/capabilities/adas_si/index.sqlite"
+  },
+  "external_resources": {
+    "adas_si": "X:\\ADAS SI",
+    "calibration_iq_endpoint_shape": "http://127.0.0.1:8084/api/v1/tools/v1/calibration-iq",
+    "calibration_iq_project_path": "X:\\calibration iq",
+    "web_providers": ["Bing News RSS", "DuckDuckGo HTML"]
+  },
+  "versions": {
+    "database_schema": 3,
+    "migration": "0003_voice_output_settings",
+    "capability_registry": "3.2.0",
+    "capability_permission_schema": 1,
+    "artifact_schema": 2,
+    "adas_si_cache_schema": 1
+  },
+  "feature_state": {
+    "streaming": true,
+    "voice_output": true,
+    "speech_recognition_requires_browser_permission": true,
+    "project_context": true,
+    "web": true,
+    "calibration_iq": true,
+    "adas_si": true,
+    "artifact_scoping": true,
+    "allowlisted_calibration_iq_start": true
+  },
+  "secret_requirements": [
+    {"name": "XV12_GOOGLE_CLIENT_ID", "location_type": "config/.env.local or process environment", "configured_at_freeze": true},
+    {"name": "XV12_GOOGLE_CLIENT_SECRET", "location_type": "config/.env.local or process environment", "configured_at_freeze": true},
+    {"name": "XV12_GOOGLE_REDIRECT_URI", "location_type": "config/.env.local or process environment", "configured_at_freeze": true},
+    {"name": "XV12_OWNER_GOOGLE_SUB", "location_type": "config/.env.local or process environment", "configured_at_freeze": true}
+  ],
+  "optional_overrides": [
+    "XV12_AUTH_MODE",
+    "XV12_COOKIE_SECURE",
+    "XV12_APP_HOST",
+    "XV12_APP_PORT",
+    "XV12_MODEL_BASE_URL",
+    "XV12_MODEL_PORT",
+    "XV12_MODEL_ALIAS",
+    "XV12_MODEL_CONTEXT_TOKENS",
+    "XV12_MODEL_MAX_TOKENS",
+    "XV12_MODEL_TEMPERATURE",
+    "XV12_DATABASE_PATH",
+    "XV12_ATTACHMENTS_PATH",
+    "XV12_ADAS_DATABASE_PATH",
+    "XV12_CALIBRATION_IQ_BASE_URL",
+    "XV12_CALIBRATION_IQ_PROJECT_PATH",
+    "XV12_WEB_TIMEOUT_SECONDS"
+  ]
+}
