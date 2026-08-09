@@ -62,6 +62,8 @@ class CapabilityRegistry:
     def permission_catalog(self, role: str = "user") -> list[dict[str, Any]]:
         families: dict[str, dict[str, Any]] = {}
         for item in self.capabilities.values():
+            if item.get("platform_service"):
+                continue
             allowed = self._role_ceiling(item, role)
             if not allowed:
                 continue
@@ -94,6 +96,10 @@ class CapabilityRegistry:
         raise CapabilityNotFound(tool_name)
 
     def model_tools(self, user: dict[str, Any]) -> list[dict[str, Any]]:
+        items = self.list_for(user)
+        model_tool_filter = getattr(self, "model_tool_filter", None)
+        if callable(model_tool_filter):
+            items = model_tool_filter(items, user)
         return [
             {
                 "type": "function",
@@ -103,7 +109,7 @@ class CapabilityRegistry:
                     "parameters": item["arguments_schema"],
                 },
             }
-            for item in self.list_for(user)
+            for item in items
             if item.get("model_exposed", True) and item["id"] in self.capabilities
         ]
 
@@ -116,6 +122,9 @@ class CapabilityRegistry:
         ceiling = self._role_ceiling(capability, user["role"])
         allowed = user.get("status", "active") == "active" and scope in ceiling
         reason = "role_scope_allowed" if allowed else "role_scope_denied"
+        if allowed and capability.get("platform_service"):
+            reason = "authenticated_platform_service"
+            return AuthorizationDecision(True, capability_id, user["id"], user["role"], reason, family, scope)
         if allowed and user["role"] != "admin" and int(capability["risk_tier"]) >= 2:
             allowed, reason = False, "risk_tier_denied"
         if allowed and user["role"] != "admin" and self.permissions is not None:

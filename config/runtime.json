@@ -24,7 +24,8 @@
   "versions": {
     "database_schema": 3,
     "migration": "0003_voice_output_settings",
-    "capability_registry": "3.0.0",
-    "capability_permission_schema": 1
+    "capability_registry": "3.1.0",
+    "capability_permission_schema": 1,
+    "artifact_schema": 1
   }
 }

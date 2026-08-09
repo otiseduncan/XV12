@@ -16,7 +16,26 @@ class CalibrationIQCapability:
         self.settings = settings
 
     async def read(self, arguments: dict[str, Any], _user: dict[str, Any]) -> dict[str, Any]:
-        return await calibration_iq_read(self.settings, arguments)
+        result = await calibration_iq_read(self.settings, arguments)
+        items = list(result.get("items") or [])
+        if items:
+            rows = [
+                {
+                    "RO": item.get("ro_number"),
+                    "Vehicle": " ".join(str(value) for value in (item.get("year"), item.get("make"), item.get("model")) if value),
+                    "Status": item.get("display_status") or item.get("status"),
+                    "Shop": (item.get("shop") or {}).get("name") if isinstance(item.get("shop"), dict) else item.get("shop"),
+                }
+                for item in items[:20]
+            ]
+            result["artifacts"] = [{
+                "id": f"ciq-{uuid.uuid5(uuid.NAMESPACE_URL, str(result.get('count')) + json_key(rows))}",
+                "type": "structured_data", "title": "Calibration IQ repair orders",
+                "mime_type": "application/json", "source": "Calibration IQ", "reference": None,
+                "preview": {"kind": "table"}, "downloadable": False, "printable": False,
+                "copyable": True, "metadata": {"count": result.get("count"), "returned": len(rows)}, "data": rows,
+            }]
+        return result
 
     async def mutate(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         token = _calibration_env(self.settings.calibration_iq_project_path).get("TOOL_SERVICE_TOKEN", "")
@@ -41,7 +60,17 @@ class CalibrationIQCapability:
         result = response.json()
         receipt = dict(result.get("receipt") or {})
         receipt.update({"authenticated_user": user["id"], "target": ro_id, "requested_change": body, "idempotency_key": key, "verified": bool(result.get("success") and receipt.get("status") == "completed")})
-        return {"status": "success" if receipt["verified"] else "partial_success", "duplicate": bool(result.get("duplicate")), "receipt": receipt}
+        status = "success" if receipt["verified"] else "partial_success"
+        return {
+            "status": status, "duplicate": bool(result.get("duplicate")), "receipt": receipt,
+            "artifacts": [{
+                "id": str(receipt.get("mutation_id") or key), "type": "receipt", "title": "Calibration IQ execution receipt",
+                "mime_type": "application/json", "source": "Calibration IQ", "reference": None,
+                "preview": {"kind": "receipt"}, "downloadable": False, "printable": False, "copyable": True,
+                "metadata": {"operation": operation, "target": ro_id, "status": receipt.get("status"), "verified": receipt.get("verified"), "duplicate": bool(result.get("duplicate"))},
+                "data": {"mutation_id": receipt.get("mutation_id"), "correlation_id": receipt.get("correlation_id"), "operation": operation, "status": receipt.get("status"), "verified": receipt.get("verified")},
+            }],
+        }
 
     async def write(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         if str(arguments.get("operation") or "") != "update_ro":
@@ -50,3 +79,8 @@ class CalibrationIQCapability:
 
     async def modify(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         return await self.mutate(arguments, user)
+
+
+def json_key(value: Any) -> str:
+    import json
+    return json.dumps(value, sort_keys=True, default=str)

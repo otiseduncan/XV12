@@ -1,5 +1,5 @@
 {
-  "registry_version": "3.0.0",
+  "registry_version": "3.1.0",
   "capabilities": [
     {
       "id": "system.health.read", "family": "system",
@@ -27,7 +27,7 @@
     },
     {
       "id": "adas.knowledge.search", "family": "adas_si", "family_label": "ADAS SI", "family_description": "Authoritative ADAS service information and managed records.",
-      "description": "Search verified, cited ADAS procedures and calibration requirements in the XV12-owned database. Do not treat no_result as proof that no external information exists.",
+      "description": "Search normalized verified ADAS procedure records in the XV12-owned database, especially structured requirement questions such as calibration after component replacement. Do not use this function when the user asks for a specific OEM service procedure, source document, PDF, page, manual, or to display, view, download, print, or copy a document; use adas_si_search for those requests. Do not treat no_result as proof that no external information exists.",
       "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
       "arguments_schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "year": {"type": "integer", "minimum": 1990, "maximum": 2100}, "make": {"type": "string"}, "model": {"type": "string"}}, "additionalProperties": false},
       "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available",
@@ -48,6 +48,14 @@
       "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]},
       "arguments_schema": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 250}, "max_bytes": {"type": "integer", "minimum": 1, "maximum": 524288}}, "additionalProperties": false},
       "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "bounded-local-files", "idempotency": "safe"
+    },
+    {
+      "id": "artifact.recent.read", "family": "artifacts", "family_label": "Conversation Artifacts", "family_description": "Secure references to material already retrieved in this conversation.",
+      "description": "Return recent user-authorized artifacts already retrieved in this conversation. Use this for follow-ups such as display the document, open it, print that, download it, show page N, copy the text, or summarize this section. Do not repeat the originating search when this returns the requested artifact.",
+      "version": "1.0.0", "risk_tier": 0, "platform_service": true, "authorization": {"roles": ["admin", "user"]},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]},
+      "arguments_schema": {"type": "object", "properties": {"title": {"type": "string", "maxLength": 240}, "action": {"type": "string", "enum": ["display", "view", "download", "print", "copy", "summarize"]}, "page": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 10}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available", "execution_environment": "xv12-artifact-store", "idempotency": "safe"
     },
     {
       "id": "files.local.write", "family": "files", "family_label": "Local Files", "family_description": "Bounded structured local filesystem access without shell execution.",
@@ -73,7 +81,7 @@
     },
     {
       "id": "adas.si.search", "family": "adas_si", "family_label": "ADAS SI", "family_description": "Authoritative ADAS service information and managed records.",
-      "description": "Search actual authorized ADAS SI PDFs, broaden candidate sources, and return page-level evidence excerpts.",
+      "description": "Search the actual authorized OEM ADAS SI PDFs and return page-level evidence plus a secure inline document artifact. Use this first for a year/make/model-specific OEM service or calibration procedure and whenever the user asks for the source document, PDF, manual, page, display, view, download, print, or copy. For example, a 2018 Audi A5 lane change assist calibration procedure must use this function, not adas_knowledge_search.",
       "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]}, "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]},
       "arguments_schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string", "minLength": 2, "maxLength": 500}}, "additionalProperties": false}, "result_schema": {"type": "object"}, "timeout_seconds": 90, "health": "dynamic", "execution_environment": "adas-si-pdf-cache", "idempotency": "safe"
     },

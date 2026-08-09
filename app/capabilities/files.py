@@ -8,9 +8,10 @@ from typing import Any
 class LocalFilesCapability:
     """Structured filesystem access with bounded roots and managed-only mutations."""
 
-    def __init__(self, read_roots: list[Path], managed_root: Path) -> None:
+    def __init__(self, read_roots: list[Path], managed_root: Path, artifacts: Any | None = None) -> None:
         self.read_roots = [path.resolve() for path in read_roots]
         self.managed_root = managed_root.resolve()
+        self.artifacts = artifacts
         self.managed_root.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -37,6 +38,14 @@ class LocalFilesCapability:
         data = path.read_bytes()
         return {"path": str(path), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(), "modified_ns": path.stat().st_mtime_ns}
 
+    def _artifact(self, path: Path, user: dict[str, Any], relevant_text: str = "") -> list[dict[str, Any]]:
+        if self.artifacts is None:
+            return []
+        try:
+            return [self.artifacts.register_file(user_id=user["id"], capability_id="files.local.read", source_path=path, title=path.name, source_label="Local Files", relevant_text=relevant_text)]
+        except ValueError:
+            return []
+
     def read(self, arguments: dict[str, Any], _user: dict[str, Any]) -> dict[str, Any]:
         path = self._read_path(str(arguments.get("path") or ""))
         if not path.exists():
@@ -50,8 +59,9 @@ class LocalFilesCapability:
         maximum = min(max(int(arguments.get("max_bytes") or 131072), 1), 524288)
         data = path.read_bytes()
         if b"\x00" in data[:4096]:
-            return {"status": "partial_success", **self._metadata(path), "message": "Binary file metadata returned; content was not decoded."}
-        return {"status": "success", **self._metadata(path), "content": data[:maximum].decode("utf-8", errors="replace"), "truncated": len(data) > maximum}
+            return {"status": "partial_success", **self._metadata(path), "message": "Binary file metadata returned; content was not decoded.", "artifacts": self._artifact(path, _user)}
+        content = data[:maximum].decode("utf-8", errors="replace")
+        return {"status": "success", **self._metadata(path), "content": content, "truncated": len(data) > maximum, "artifacts": self._artifact(path, _user, content)}
 
     def write(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         path = self._managed_path(str(arguments.get("path") or ""), user)
@@ -60,7 +70,7 @@ class LocalFilesCapability:
         content = str(arguments.get("content") or "")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8", newline="\n")
-        return {"status": "success", "operation": "write", "receipt": {**self._metadata(path), "user_id": user["id"]}}
+        return {"status": "success", "operation": "write", "receipt": {**self._metadata(path), "user_id": user["id"]}, "artifacts": self._artifact(path, user, content)}
 
     def modify(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         path = self._managed_path(str(arguments.get("path") or ""), user)
@@ -71,4 +81,5 @@ class LocalFilesCapability:
         if before["sha256"] != expected:
             raise ValueError("File changed before modification; expected SHA256 does not match.")
         path.write_text(str(arguments.get("content") or ""), encoding="utf-8", newline="\n")
-        return {"status": "success", "operation": "modify", "receipt": {"before_sha256": before["sha256"], **self._metadata(path), "user_id": user["id"]}}
+        content = str(arguments.get("content") or "")
+        return {"status": "success", "operation": "modify", "receipt": {"before_sha256": before["sha256"], **self._metadata(path), "user_id": user["id"]}, "artifacts": self._artifact(path, user, content)}

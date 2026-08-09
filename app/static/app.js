@@ -260,24 +260,76 @@ function renderConversation() {
   requestAnimationFrame(() => { state.pinnedToBottom = true; scrollLatest(true); });
 }
 
-function appendCard(container, card) {
-  const article = document.createElement("article"); article.className = "capability-card";
-  const result = card.result || {}, status = result.status || "complete";
-  article.innerHTML = `<header><span>◇</span><strong></strong><em></em></header><div class="card-detail"></div>`;
-  article.querySelector("strong").textContent = card.capability_id || "Capability"; article.querySelector("em").textContent = status;
-  const detail = article.querySelector(".card-detail");
-  const searchResults = result.results || result.items || [];
-  if (Array.isArray(searchResults) && searchResults.length) {
-    searchResults.slice(0, 5).forEach((item) => {
-      const line = document.createElement(item.url ? "a" : "div"); line.className = "card-result";
-      if (item.url) { line.href = item.url; line.target = "_blank"; line.rel = "noopener noreferrer"; }
-      line.textContent = item.title || item.ro_number || [item.vehicle?.year, item.vehicle?.make, item.vehicle?.model].filter(Boolean).join(" ") || JSON.stringify(item).slice(0, 180); detail.append(line);
-    });
-  } else {
-    const summary = result.message || (result.coverage ? JSON.stringify(result.coverage) : result.project?.name ? `Project: ${result.project.name}` : status);
-    detail.textContent = summary;
-  }
+function artifactUrl(artifact, download = false) {
+  const base = artifact.reference || artifact.preview?.url || ""; if (!base) return "";
+  const page = artifact.preview?.page || artifact.metadata?.page; const query = download ? `${base.includes("?") ? "&" : "?"}download=true` : base;
+  return page && !download ? `${query}#page=${page}` : query;
+}
+
+async function copyArtifact(artifact) {
+  try {
+    if (artifact.type === "image" && artifactUrl(artifact) && window.ClipboardItem) {
+      try {
+        const response = await fetch(artifactUrl(artifact), { credentials: "same-origin" }); const blob = await response.blob();
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      } catch { await writeClipboardText(new URL(artifactUrl(artifact), window.location.href).href); }
+    } else {
+      const text = artifact.data ? (typeof artifact.data === "string" ? artifact.data : JSON.stringify(artifact.data, null, 2))
+        : await (await fetch(`/api/artifacts/${encodeURIComponent(artifact.id)}/text`, { credentials: "same-origin" })).text();
+      await writeClipboardText(text);
+    }
+    toast("Copied to clipboard.", "success");
+  } catch { toast("This artifact could not be copied in the current browser.", "error"); }
+}
+
+async function writeClipboardText(text) {
+  try { await navigator.clipboard.writeText(text); return; } catch {}
+  const field = document.createElement("textarea"); field.value = text; field.setAttribute("readonly", ""); field.style.cssText = "position:fixed;left:-9999px;top:0"; document.body.append(field); field.select();
+  const copied = document.execCommand("copy"); field.remove(); if (!copied) throw new Error("Clipboard write was rejected.");
+}
+
+function appendArtifact(container, artifact) {
+  const article = document.createElement("article"); article.className = `artifact-card artifact-${String(artifact.type || "file").replace(/[^a-z_-]/gi, "")}`; article.dataset.artifactId = artifact.id || "";
+  const page = artifact.metadata?.page || artifact.preview?.page; const section = artifact.metadata?.section;
+  article.innerHTML = `<header><div class="artifact-mark">▧</div><div class="artifact-heading"><strong></strong><span></span></div></header><div class="artifact-preview"></div><div class="artifact-actions"></div>`;
+  article.querySelector("strong").textContent = artifact.title || "Artifact";
+  article.querySelector(".artifact-heading span").textContent = [artifact.source, page ? `Page ${page}` : "", section || ""].filter(Boolean).join(" · ");
+  const preview = article.querySelector(".artifact-preview"), url = artifactUrl(artifact);
+  if (artifact.type === "image" && url) {
+    const image = document.createElement("img"); image.src = url; image.alt = artifact.title || "Generated image"; image.loading = "lazy"; preview.append(image);
+  } else if (artifact.mime_type === "application/pdf" && url) {
+    const frame = document.createElement("iframe"); frame.src = url; frame.title = `${artifact.title || "Document"} preview`; frame.loading = "lazy"; preview.append(frame);
+  } else if (artifact.type === "document" && url) {
+    const frame = document.createElement("iframe"); frame.src = url; frame.title = `${artifact.title || "Document"} preview`; frame.loading = "lazy"; preview.append(frame);
+  } else if (artifact.type === "structured_data" && Array.isArray(artifact.data)) {
+    const table = document.createElement("table"), columns = [...new Set(artifact.data.flatMap((row) => Object.keys(row || {})))];
+    const head = document.createElement("thead"), header = document.createElement("tr"); columns.forEach((name) => { const cell = document.createElement("th"); cell.textContent = name; header.append(cell); }); head.append(header); table.append(head);
+    const body = document.createElement("tbody"); artifact.data.forEach((row) => { const tr = document.createElement("tr"); columns.forEach((name) => { const cell = document.createElement("td"); cell.textContent = row?.[name] ?? ""; tr.append(cell); }); body.append(tr); }); table.append(body); preview.append(table);
+  } else if (artifact.type === "receipt" && artifact.data) {
+    const list = document.createElement("dl"); Object.entries(artifact.data).forEach(([key, value]) => { const term = document.createElement("dt"); term.textContent = key.replaceAll("_", " "); const detail = document.createElement("dd"); detail.textContent = value ?? ""; list.append(term, detail); }); preview.append(list);
+  } else { preview.classList.add("hidden"); }
+  const actions = article.querySelector(".artifact-actions");
+  if (url) { const view = document.createElement("a"); view.href = url; view.target = "_blank"; view.rel = "noopener"; view.textContent = "View"; actions.append(view); }
+  if (artifact.downloadable && artifact.reference) { const download = document.createElement("a"); download.href = artifactUrl(artifact, true); download.textContent = "Download"; actions.append(download); }
+  if (artifact.printable && url) { const print = document.createElement("button"); print.type = "button"; print.textContent = "Print"; print.addEventListener("click", () => { const popup = window.open(url, "_blank"); if (popup) { popup.opener = null; popup.addEventListener("load", () => setTimeout(() => popup.print(), 700), { once: true }); } }); actions.append(print); }
+  if (artifact.copyable) { const copy = document.createElement("button"); copy.type = "button"; copy.textContent = artifact.mime_type === "application/pdf" ? "Copy text" : "Copy"; copy.addEventListener("click", () => copyArtifact(artifact)); actions.append(copy); }
+  if (!preview.classList.contains("hidden")) { const collapse = document.createElement("button"); collapse.type = "button"; collapse.textContent = "Collapse"; collapse.addEventListener("click", () => { preview.classList.toggle("hidden"); collapse.textContent = preview.classList.contains("hidden") ? "Expand" : "Collapse"; }); actions.append(collapse); }
   container.append(article);
+}
+
+function appendCard(container, card) {
+  const result = card.result || {}, artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+  artifacts.forEach((artifact) => appendArtifact(container, artifact));
+  const searchResults = result.results || result.items || [], links = Array.isArray(searchResults) ? searchResults.filter((item) => item?.url).slice(0, 5) : [];
+  if (links.length) {
+    const article = document.createElement("article"); article.className = "source-card"; article.innerHTML = `<header><strong>Sources</strong></header><div class="card-detail"></div>`; const detail = article.querySelector(".card-detail");
+    links.forEach((item) => { const line = document.createElement("a"); line.className = "card-result"; line.href = item.url; line.target = "_blank"; line.rel = "noopener noreferrer"; line.textContent = item.title || item.url; const meta = document.createElement("small"); meta.textContent = [item.source, item.published_at].filter(Boolean).join(" · "); line.append(meta); detail.append(line); }); container.append(article);
+  } else if (!artifacts.length && Array.isArray(searchResults) && searchResults.length) {
+    const article = document.createElement("article"); article.className = "source-card"; article.innerHTML = `<header><strong>Results</strong></header><div class="card-detail"></div>`; const detail = article.querySelector(".card-detail");
+    searchResults.slice(0, 5).forEach((item) => { const line = document.createElement("div"); line.className = "card-result"; line.textContent = item.title || item.ro_number || [item.vehicle?.year, item.vehicle?.make, item.vehicle?.model].filter(Boolean).join(" ") || "Result"; detail.append(line); }); container.append(article);
+  } else if (!artifacts.length && (result.message || result.project?.name)) {
+    const note = document.createElement("div"); note.className = "result-note"; note.textContent = result.message || `Project: ${result.project.name}`; container.append(note);
+  }
 }
 
 function appendMessage(role, content = "", status = "complete", metadata = {}) {
@@ -308,7 +360,7 @@ async function sendMessage(raw) {
         const data = JSON.parse(dataLine);
         if (event === "delta") { assistant.text.textContent += data.text; scrollLatest(); }
         if (event === "capability") {
-          if (data.status === "running") { composerStatus.textContent = `Using ${data.capability_id}…`; $("#presence-label").textContent = "Working"; }
+          if (data.status === "running") { composerStatus.textContent = "Checking authorized sources…"; $("#presence-label").textContent = "Working"; }
           if (data.status === "complete") {
             appendCard(assistant.cards, data); scrollLatest();
             if (data.capability_id.startsWith("project.")) await loadProjects();

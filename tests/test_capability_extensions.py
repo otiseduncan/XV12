@@ -8,6 +8,7 @@ import pytest
 from app.capabilities.adas_si import AdasSICapability
 from app.capabilities.calibration_iq import CalibrationIQCapability
 from app.capabilities.files import LocalFilesCapability
+from app.artifacts import ArtifactStore, artifact_conversation
 from app.config import Settings
 from app.registry import CapabilityGateway, CapabilityRegistry
 
@@ -52,13 +53,20 @@ def test_real_audi_a5_lane_change_search_returns_page_evidence(tmp_path: Path) -
     source = Path(r"X:\ADAS SI")
     if not source.is_dir():
         pytest.skip("Authorized ADAS SI source is unavailable")
-    capability = AdasSICapability(source, tmp_path / "adas-cache.sqlite")
-    result = capability.search({"query": "lane change assist calibration procedure 2018 Audi A5"}, ADMIN)
+    artifact_store = ArtifactStore(tmp_path / "artifacts.sqlite", [source])
+    artifact_store.initialize()
+    capability = AdasSICapability(source, tmp_path / "adas-cache.sqlite", artifact_store)
+    with artifact_conversation("audi-acceptance"):
+        result = capability.search({"query": "lane change assist calibration procedure 2018 Audi A5"}, ADMIN)
     evidence = [item for item in result["results"] if item.get("excerpt")]
     assert result["status"] == "success"
     assert any("2018 Audi A5 electronics.pdf" in item["source"] for item in evidence)
     assert any(291 <= item["page"] <= 298 for item in evidence)
     assert result["broader_search_performed"] is True
+    assert result["artifacts"][0]["title"] == "2018 Audi A5 electronics.pdf"
+    assert result["artifacts"][0]["source"] == "ADAS SI"
+    assert result["artifacts"][0]["metadata"]["page"] in range(291, 299)
+    assert str(source) not in str(result)
 
 
 @pytest.mark.gateway

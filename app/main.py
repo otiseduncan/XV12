@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from .auth import create_auth_router, current_user
 from .assistant import AssistantOrchestrator
+from .artifacts import ArtifactStore, ConversationContextMiddleware, active_conversation_id, active_user_message, create_artifact_router
 from .capabilities.adas_si import AdasSICapability
 from .capabilities.calibration_iq import CalibrationIQCapability
 from .capabilities.files import LocalFilesCapability
@@ -28,8 +29,9 @@ from .context import ContextAssembler
 from .data_tools import adas_coverage, adas_search, calibration_iq_health, calibration_iq_read, start_calibration_iq
 from .database import UserScopedStore, utcnow
 from .model import LlamaModel
+from .model_compat import ToolCallCompatibilityModel
 from .permissions import CapabilityPermissionStore, create_permission_router
-from .registry import CapabilityDenied, CapabilityGateway, CapabilityRegistry
+from .registry import CapabilityDenied, CapabilityGateway, CapabilityNotFound, CapabilityRegistry
 from .web_tools import current_search
 
 
@@ -100,14 +102,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     permission_store = CapabilityPermissionStore(capability_data / "permissions.sqlite", settings.database_path)
     permission_store.initialize()
     registry = CapabilityRegistry(settings.root / "config" / "capabilities.v1.json", permission_store)
+    artifact_store = ArtifactStore(
+        capability_data / "artifacts.sqlite",
+        [settings.root, Path(r"X:\ADAS SI"), settings.calibration_iq_project_path],
+    )
+    artifact_store.initialize()
+
+    def filter_model_tools(items: list[dict[str, Any]], user: dict[str, Any]) -> list[dict[str, Any]]:
+        conversation_id = active_conversation_id()
+        message = active_user_message().casefold().strip()
+        referential_action = any(action in message for action in ("display", "open", "view", "print", "download", "copy", "show"))
+        referential_object = any(reference in message for reference in ("the document", "that document", "this document", "the file", "that file", "the pdf", "that pdf", "this pdf", "that page", "this page", "print it", "download it", "copy it", "open it", "display it"))
+        asks_for_new_source = any(phrase in message for phrase in ("another document", "different document", "new document", "search for", "find a document"))
+        has_recent = bool(conversation_id and artifact_store.recent_records(user["id"], conversation_id, "", 1))
+        if not (referential_action and referential_object and has_recent and not asks_for_new_source):
+            return items
+        retrieval_ids = {"adas.si.search", "adas.knowledge.search", "web.current.search", "files.local.read"}
+        return [item for item in items if item["id"] not in retrieval_ids]
+
+    registry.model_tool_filter = filter_model_tools
     gateway = CapabilityGateway(registry)
     files_capability = LocalFilesCapability(
         [settings.root, Path(r"X:\ADAS SI"), settings.calibration_iq_project_path],
         capability_data / "files",
+        artifact_store,
     )
-    adas_si_capability = AdasSICapability(Path(r"X:\ADAS SI"), capability_data / "adas_si" / "index.sqlite")
+    adas_si_capability = AdasSICapability(Path(r"X:\ADAS SI"), capability_data / "adas_si" / "index.sqlite", artifact_store)
     calibration_iq_capability = CalibrationIQCapability(settings)
-    model = LlamaModel(settings)
+    model = ToolCallCompatibilityModel(LlamaModel(settings))
     context = ContextAssembler(store, settings.model_context_tokens)
     turn_logger = _configure_logging(settings)
 
@@ -123,9 +145,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.registry = registry
     app.state.gateway = gateway
     app.state.permission_store = permission_store
+    app.state.artifact_store = artifact_store
     app.state.turn_logger = turn_logger
     app.include_router(create_auth_router(settings))
     app.include_router(create_permission_router(permission_store))
+    app.include_router(create_artifact_router(artifact_store))
+    app.add_middleware(ConversationContextMiddleware)
 
     async def health_document() -> dict[str, Any]:
         model_health = await app.state.model.health()
@@ -155,6 +180,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     gateway.register("system.health.read", lambda _: health_document())
     gateway.register("admin.capabilities.inspect", lambda _: {"registry_version": registry.version, "capabilities": list(registry.capabilities)})
     gateway.register("web.current.search", lambda arguments: current_search(arguments, settings.web_timeout_seconds))
+
+    def recent_artifacts(arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        conversation_id = active_conversation_id()
+        if not conversation_id:
+            return {"status": "no_result", "artifacts": [], "message": "No active conversation artifact context is available."}
+        requested_title = str(arguments.get("title") or "")
+        records = artifact_store.recent_records(
+            user["id"], conversation_id, requested_title, int(arguments.get("limit") or 3)
+        )
+        if not records and requested_title:
+            records = artifact_store.recent_records(
+                user["id"], conversation_id, "", int(arguments.get("limit") or 3)
+            )
+        artifacts = []
+        for item in records:
+            try:
+                decision = registry.authorize(str(item["capability_id"]), user)
+            except (KeyError, CapabilityDenied, CapabilityNotFound):
+                continue
+            if decision.allowed:
+                artifact = artifact_store.public(item)
+                if arguments.get("page"):
+                    artifact["preview"]["page"] = int(arguments["page"])
+                    artifact["metadata"]["page"] = int(arguments["page"])
+                artifacts.append(artifact)
+        return {
+            "status": "success" if artifacts else "no_result",
+            "artifacts": artifacts,
+            "requested_action": arguments.get("action") or "display",
+            "reused_existing_reference": bool(artifacts),
+        }
+
+    gateway.register("artifact.recent.read", recent_artifacts)
     gateway.register("adas.coverage.read", lambda arguments: adas_coverage(settings, arguments))
     gateway.register("adas.knowledge.search", lambda arguments: adas_search(settings, arguments))
     gateway.register("files.local.read", files_capability.read)
