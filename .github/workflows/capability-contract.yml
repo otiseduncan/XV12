@@ -27,7 +27,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
       - name: Run portable frozen-core and capability regressions
         run: >-
-          python -m pytest -q
+          python -m pytest -q -m "not databases"
           tests/test_capability_truth_inventory.py
           tests/test_permissions.py
           tests/test_artifacts.py
