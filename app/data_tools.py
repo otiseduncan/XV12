@@ -54,11 +54,37 @@ def adas_coverage(settings: Settings, arguments: dict[str, Any]) -> dict[str, An
             "review_items": int(db.execute("SELECT COUNT(*) FROM review_items WHERE status='needs_review'").fetchone()[0]),
             "active_source_documents": int(db.execute("SELECT COUNT(*) FROM source_documents WHERE active=1").fetchone()[0]),
         }
+    explicit_summary = {
+        "normalized_document_rows": counts["documents"],
+        "active_verification_record_rows": counts["verified_records"],
+        "review_items_needing_review": counts["review_items"],
+        "active_normalized_source_document_rows": counts["active_source_documents"],
+        "returned_vehicle_application_rows": len(applications),
+    }
     return {
         "status": "verified" if applications else "no_result",
         "filters": {"make": make or None, "model": model or None, "year": year},
         "coverage": counts,
+        "coverage_summary": explicit_summary,
         "applications": applications,
+        "entity_semantics": {
+            "coverage.documents": "Rows in the normalized XV12 documents table; not a vehicle-application count.",
+            "coverage.verified_records": "Active rows in the normalized verification_records table; not a vehicle-application count and not the operator verification state of X:\\ADAS SI.",
+            "coverage.review_items": "Rows currently marked needs_review in the normalized review queue; not unverified vehicles.",
+            "coverage.active_source_documents": "Active rows in the normalized source_documents table; not the authoritative X:\\ADAS SI PDF inventory.",
+            "applications": "Vehicle-application rows actually returned by this normalized database query.",
+            "counts_are_not_interchangeable": True,
+        },
+        "enumeration": {
+            "normalized_vehicle_rows_in_this_result": len(applications),
+            "authoritative_source_inventory_capability": "adas.si.inventory.read",
+            "instruction": "Use the ADAS SI inventory capability for the authoritative source-library document and year/make/model inventory. Do not subtract unrelated counts to invent records.",
+        },
+        "evidence_contract": {
+            "authoritative_records_only": True,
+            "specific_records_must_come_from_applications": True,
+            "do_not_infer_records_from_counts": True,
+        },
         "evidence": {"source": "xv12_owned_adas_database", "read_only": True},
     }
 
@@ -135,6 +161,7 @@ def adas_search(settings: Settings, arguments: dict[str, Any]) -> dict[str, Any]
         "query": query,
         "results": results[:5],
         "evidence": {"source": "xv12_owned_adas_database", "verified_only": True, "read_only": True},
+        "evidence_contract": {"authoritative_records_only": True, "specific_facts_traceable_to_results": True},
     }
 
 
