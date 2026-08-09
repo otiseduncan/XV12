@@ -1,0 +1,28 @@
+{
+  "application": {
+    "name": "XODUZ XV12",
+    "host": "127.0.0.1",
+    "port": 8120
+  },
+  "model": {
+    "alias": "xoduz-qwen3-coder-30b",
+    "port": 8121,
+    "context_tokens": 32768,
+    "max_response_tokens": 768,
+    "temperature": 0.35,
+    "gpu_layers": 99,
+    "parallel": 1,
+    "startup_timeout_seconds": 420,
+    "executable": "runtime/llama.cpp/llama-server.exe",
+    "path": "models/qwen3-coder-30b-a3b/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"
+  },
+  "storage": {
+    "database": "data/xv12.db",
+    "attachments": "data/attachments"
+  },
+  "versions": {
+    "database_schema": 1,
+    "migration": "0001_baseline_core",
+    "capability_registry": "1.0.0"
+  }
+}
