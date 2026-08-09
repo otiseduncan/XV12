@@ -1,5 +1,5 @@
 {
-  "registry_version": "3.2.0",
+  "registry_version": "4.0.0",
   "capabilities": [
     {
       "id": "system.health.read", "family": "system",
@@ -164,6 +164,156 @@
       "arguments_schema": {"type": "object", "properties": {"voice_name": {"type": "string", "minLength": 1, "maxLength": 120}, "voice_volume": {"type": "integer", "minimum": 0, "maximum": 100}, "voice_muted": {"type": "boolean"}}, "additionalProperties": false},
       "result_schema": {"type": "object"}, "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]}, "timeout_seconds": 5, "health": "available",
       "execution_environment": "xv12-user-settings", "idempotency": "user-requested-write"
+    },
+    {
+      "id": "job.status", "family": "jobs", "family_label": "Creator Jobs", "family_description": "Durable background creation and execution jobs.",
+      "description": "Read the persisted progress, state, and resulting artifacts for one owned Creator job.", "version": "1.0.0", "risk_tier": 0, "platform_service": true, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["job_id"], "properties": {"job_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 5, "health": "available", "execution_environment": "xv12-job-manager", "idempotency": "safe"
+    },
+    {
+      "id": "job.cancel", "family": "jobs", "family_label": "Creator Jobs", "family_description": "Durable background creation and execution jobs.",
+      "description": "Request cancellation of one owned Creator job. Completed jobs remain unchanged.", "version": "1.0.0", "risk_tier": 0, "platform_service": true, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["job_id"], "properties": {"job_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]}, "timeout_seconds": 5, "health": "available", "execution_environment": "xv12-job-manager", "idempotency": "safe"
+    },
+    {
+      "id": "builder.workspace.create", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Create a new durable user-owned managed application workspace and return its workspace ID.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["write"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write"], "user": ["write"]}, "timeout_seconds": 10, "health": "available", "execution_environment": "managed-builder-workspaces", "idempotency": "creates-new"
+    },
+    {
+      "id": "builder.workspace.open", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Open an existing owned managed Builder workspace by exact workspace ID.", "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id"], "properties": {"workspace_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 5, "health": "available", "execution_environment": "managed-builder-workspaces", "idempotency": "safe"
+    },
+    {
+      "id": "builder.workspace.inspect", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Inspect the bounded file inventory, manifests, and test configuration of an owned Builder workspace.", "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id"], "properties": {"workspace_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 10, "health": "available", "execution_environment": "managed-builder-workspaces", "idempotency": "safe"
+    },
+    {
+      "id": "builder.files.read", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Read one bounded UTF-8 file inside an owned Builder workspace and return its SHA256.", "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id", "path"], "properties": {"workspace_id": {"type": "string"}, "path": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 10, "health": "available", "execution_environment": "managed-builder-workspaces", "idempotency": "safe"
+    },
+    {
+      "id": "builder.files.patch", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Atomically replace one bounded workspace file, optionally guarded by its expected SHA256.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id", "path", "content"], "properties": {"workspace_id": {"type": "string"}, "path": {"type": "string"}, "content": {"type": "string"}, "expected_sha256": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]}, "timeout_seconds": 10, "health": "available", "execution_environment": "managed-builder-workspaces", "idempotency": "optimistic-sha256"
+    },
+    {
+      "id": "builder.files.batch", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Apply 1 to 100 bounded file writes as one rollback-safe atomic workspace batch.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id", "files"], "properties": {"workspace_id": {"type": "string"}, "files": {"type": "array"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["write", "modify"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write", "modify"], "user": ["write", "modify"]}, "timeout_seconds": 30, "health": "available", "execution_environment": "managed-builder-workspaces", "idempotency": "atomic-batch"
+    },
+    {
+      "id": "builder.sandbox.exec", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Run a bounded argv command in the isolated Docker Builder sandbox for dependency installs, builds, migrations, or tests. Host shell access is never provided.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id", "argv"], "properties": {"workspace_id": {"type": "string"}, "argv": {"type": "array"}, "network": {"type": "boolean"}, "secret_refs": {"type": "array"}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 900}, "report_type": {"type": "string", "enum": ["build_report", "test_report"]}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 920, "health": "dynamic", "execution_environment": "docker-builder-sandbox", "idempotency": "command-dependent"
+    },
+    {
+      "id": "builder.preview.start", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Start an isolated read-only local web preview for an owned Builder workspace and return an Application artifact.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id"], "properties": {"workspace_id": {"type": "string"}, "directory": {"type": "string"}, "title": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 45, "health": "dynamic", "execution_environment": "docker-preview-manager", "idempotency": "creates-preview"
+    },
+    {
+      "id": "builder.preview.status", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Read the live state and URL of an owned managed application preview.", "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["preview_id"], "properties": {"preview_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 10, "health": "dynamic", "execution_environment": "docker-preview-manager", "idempotency": "safe"
+    },
+    {
+      "id": "builder.preview.stop", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Stop one owned managed preview without touching unrelated containers.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["preview_id"], "properties": {"preview_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 20, "health": "dynamic", "execution_environment": "docker-preview-manager", "idempotency": "safe"
+    },
+    {
+      "id": "browser.preview.inspect", "family": "browser_validation", "family_label": "Browser Validation", "family_description": "Chromium inspection and visual proof for managed previews.",
+      "description": "Render an owned managed preview in headless Chromium and return bounded DOM, title, and visible-text evidence.", "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["preview_id"], "properties": {"preview_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 60, "health": "dynamic", "execution_environment": "managed-headless-chromium", "idempotency": "safe"
+    },
+    {
+      "id": "browser.preview.screenshot", "family": "browser_validation", "family_label": "Browser Validation", "family_description": "Chromium inspection and visual proof for managed previews.",
+      "description": "Render an owned managed preview in headless Chromium and return an inline screenshot artifact.", "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["preview_id"], "properties": {"preview_id": {"type": "string"}, "title": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 75, "health": "dynamic", "execution_environment": "managed-headless-chromium", "idempotency": "creates-artifact"
+    },
+    {
+      "id": "builder.project.archive", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Create a downloadable project archive artifact while excluding Git history, dependencies, environment files, and secrets.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id"], "properties": {"workspace_id": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 60, "health": "available", "execution_environment": "managed-builder-workspaces", "idempotency": "creates-artifact"
+    },
+    {
+      "id": "git.status", "family": "git", "family_label": "Git", "family_description": "Repository inspection and authorized source-control operations inside managed workspaces.",
+      "description": "Read concise Git branch and worktree status inside an owned Builder workspace.", "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id"], "properties": {"workspace_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 15, "health": "available", "execution_environment": "bounded-git-argv", "idempotency": "safe"
+    },
+    {
+      "id": "git.diff", "family": "git", "family_label": "Git", "family_description": "Repository inspection and authorized source-control operations inside managed workspaces.",
+      "description": "Read a bounded Git diff or diff statistics inside an owned Builder workspace.", "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id"], "properties": {"workspace_id": {"type": "string"}, "stat_only": {"type": "boolean"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 15, "health": "available", "execution_environment": "bounded-git-argv", "idempotency": "safe"
+    },
+    {
+      "id": "git.commit", "family": "git", "family_label": "Git", "family_description": "Repository inspection and authorized source-control operations inside managed workspaces.",
+      "description": "Stage workspace changes and create a Git commit with an explicit message, returning a receipt artifact.", "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id", "message"], "properties": {"workspace_id": {"type": "string"}, "message": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["write"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write"]}, "timeout_seconds": 180, "health": "available", "execution_environment": "bounded-git-argv", "idempotency": "creates-commit"
+    },
+    {
+      "id": "git.pull", "family": "git", "family_label": "Git", "family_description": "Repository inspection and authorized source-control operations inside managed workspaces.",
+      "description": "Perform a fast-forward-only Git pull in an owned workspace. History rewriting is prohibited.", "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id"], "properties": {"workspace_id": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"]}, "timeout_seconds": 320, "health": "available", "execution_environment": "bounded-git-argv", "idempotency": "remote-dependent"
+    },
+    {
+      "id": "git.push", "family": "git", "family_label": "Git", "family_description": "Repository inspection and authorized source-control operations inside managed workspaces.",
+      "description": "Push the current workspace branch normally. Force push and refspec overrides are not supported.", "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id"], "properties": {"workspace_id": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"]}, "timeout_seconds": 320, "health": "available", "execution_environment": "bounded-git-argv", "idempotency": "remote-dependent"
+    },
+    {
+      "id": "secrets.reference.configure", "family": "secrets", "family_label": "Secrets", "family_description": "Opaque references for execution-time secret injection without model exposure.",
+      "description": "Register an environment-variable reference and allowed execution contexts. The secret value is never accepted or returned.", "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]},
+      "arguments_schema": {"type": "object", "required": ["name", "environment_name", "contexts"], "properties": {"name": {"type": "string"}, "environment_name": {"type": "string"}, "contexts": {"type": "array"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["write"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write"]}, "timeout_seconds": 5, "health": "available", "execution_environment": "xv12-secrets-broker", "idempotency": "upsert-reference"
+    },
+    {
+      "id": "secrets.reference.status", "family": "secrets", "family_label": "Secrets", "family_description": "Opaque references for execution-time secret injection without model exposure.",
+      "description": "Read configured/not-configured status and allowed contexts for secret references; never returns environment names or values.", "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 5, "health": "available", "execution_environment": "xv12-secrets-broker", "idempotency": "safe"
+    },
+    {
+      "id": "media.image.generate", "family": "media", "family_label": "Media Creation", "family_description": "Provider-neutral image and video creation with durable chat artifacts.",
+      "description": "Generate an actual prompt-driven visual with the configured image provider and return an inline image artifact.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}, "title": {"type": "string"}, "width": {"type": "integer", "minimum": 256, "maximum": 2048}, "height": {"type": "integer", "minimum": 256, "maximum": 2048}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 30, "health": "available", "execution_environment": "provider-neutral-media", "idempotency": "creates-artifact"
+    },
+    {
+      "id": "media.image.edit", "family": "media", "family_label": "Media Creation", "family_description": "Provider-neutral image and video creation with durable chat artifacts.",
+      "description": "Create a new edited image from an owned source image artifact while preserving parent linkage and the original.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["source_artifact_id", "prompt"], "properties": {"source_artifact_id": {"type": "string"}, "prompt": {"type": "string"}, "title": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]}, "timeout_seconds": 30, "health": "available", "execution_environment": "provider-neutral-media", "idempotency": "creates-derived-artifact"
+    },
+    {
+      "id": "media.video.generate", "family": "media", "family_label": "Media Creation", "family_description": "Provider-neutral image and video creation with durable chat artifacts.",
+      "description": "Start a durable background job that creates a playable video from an owned source image artifact.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["source_artifact_id", "prompt"], "properties": {"source_artifact_id": {"type": "string"}, "prompt": {"type": "string"}, "title": {"type": "string"}, "duration_seconds": {"type": "integer", "minimum": 1, "maximum": 30}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 15, "health": "dynamic", "execution_environment": "provider-neutral-media-job", "idempotency": "creates-job"
     },
     {
       "id": "admin.capabilities.inspect", "family": "administration",

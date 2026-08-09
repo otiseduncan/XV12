@@ -26,6 +26,7 @@ from .capabilities.calibration_iq import CalibrationIQCapability
 from .capabilities.files import LocalFilesCapability
 from .config import Settings
 from .context import ContextAssembler
+from .creator import CreatorPlatform, create_creator_router
 from .data_tools import adas_coverage, adas_search, calibration_iq_health, calibration_iq_read, start_calibration_iq
 from .database import UserScopedStore, utcnow
 from .model import LlamaModel
@@ -104,9 +105,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     registry = CapabilityRegistry(settings.root / "config" / "capabilities.v1.json", permission_store)
     artifact_store = ArtifactStore(
         capability_data / "artifacts.sqlite",
-        [settings.root, Path(r"X:\ADAS SI"), settings.calibration_iq_project_path],
+        [settings.root, Path(r"X:\ADAS SI"), settings.calibration_iq_project_path, capability_data / "creator"],
     )
     artifact_store.initialize()
+    creator_platform = CreatorPlatform(capability_data / "creator", artifact_store)
 
     def filter_model_tools(items: list[dict[str, Any]], user: dict[str, Any]) -> list[dict[str, Any]]:
         conversation_id = active_conversation_id()
@@ -146,10 +148,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.gateway = gateway
     app.state.permission_store = permission_store
     app.state.artifact_store = artifact_store
+    app.state.creator_platform = creator_platform
     app.state.turn_logger = turn_logger
     app.include_router(create_auth_router(settings))
     app.include_router(create_permission_router(permission_store))
     app.include_router(create_artifact_router(artifact_store))
+    app.include_router(create_creator_router(creator_platform))
     app.add_middleware(ConversationContextMiddleware)
 
     async def health_document() -> dict[str, Any]:
@@ -174,6 +178,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "adas": {"status": "available" if (settings.adas_database_path or settings.root / "data/knowledge/adas_knowledge.sqlite").exists() else "offline"},
                 "calibration_iq": await calibration_iq_health(settings),
                 "web": {"status": "available", "providers": ["Bing News RSS", "DuckDuckGo HTML"]},
+                "creator": creator_platform.health(),
             },
         }
 
@@ -283,6 +288,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "settings.voice.update",
         lambda arguments, user: {"status": "updated", "settings": store.set_voice_settings(user["id"], arguments)},
     )
+    creator_platform.register(gateway)
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:

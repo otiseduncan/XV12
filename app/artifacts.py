@@ -155,6 +155,7 @@ class ArtifactStore:
                 "page_start": "INTEGER", "page_end": "INTEGER", "section_title": "TEXT",
                 "subsection_title": "TEXT", "section_page_start": "INTEGER", "section_page_end": "INTEGER",
                 "display_key": "TEXT NOT NULL DEFAULT ''",
+                "parent_artifact_id": "TEXT NOT NULL DEFAULT ''",
             }
             for name, declaration in additions.items():
                 if name not in columns:
@@ -177,7 +178,7 @@ class ArtifactStore:
                    user_id,conversation_id,capability_id,source_path,scope_kind,
                    COALESCE(page_start,-1),COALESCE(page_end,-1),COALESCE(section_title,''))"""
             )
-            db.execute("INSERT OR REPLACE INTO artifact_meta(key,value) VALUES('schema_version','2')")
+            db.execute("INSERT OR REPLACE INTO artifact_meta(key,value) VALUES('schema_version','3')")
 
     def _safe_path(self, source_path: Path) -> Path:
         path = source_path.resolve()
@@ -193,6 +194,8 @@ class ArtifactStore:
             return "document"
         if mime_type.startswith("image/"):
             return "image"
+        if mime_type.startswith("video/"):
+            return "video"
         return "file"
 
     @staticmethod
@@ -229,6 +232,8 @@ class ArtifactStore:
         relevant_text: str = "",
         actions: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        artifact_type: str | None = None,
+        parent_artifact_id: str | None = None,
     ) -> dict[str, Any]:
         conversation = conversation_id or active_conversation_id()
         if not conversation:
@@ -249,7 +254,7 @@ class ArtifactStore:
             artifact_metadata["source_page_count"] = len(PdfReader(str(path), strict=False).pages)
         payload = {
             "id": artifact_id, "user_id": user_id, "conversation_id": conversation,
-            "capability_id": capability_id, "artifact_type": self._kind(mime_type),
+            "capability_id": capability_id, "artifact_type": artifact_type or self._kind(mime_type),
             "title": (title or path.name)[:240], "mime_type": mime_type, "source_label": source_label[:120],
             "source_path": str(path), "relevant_text": relevant_text[:60000], "page_number": start,
             "section": (resolved_section or "")[:500] or None, "actions_json": json.dumps(enabled_actions),
@@ -260,17 +265,18 @@ class ArtifactStore:
             "subsection_title": (subsection_title or "")[:500] or None,
             "section_page_start": section_page_start, "section_page_end": section_page_end,
             "display_key": display_key, "created_at": now, "updated_at": now,
+            "parent_artifact_id": (parent_artifact_id or "")[:100],
         }
         with self.connect() as db:
             db.execute(
                 """INSERT INTO artifacts(id,user_id,conversation_id,capability_id,artifact_type,title,mime_type,
                    source_label,source_path,relevant_text,page_number,section,actions_json,metadata_json,
                    source_artifact_id,source_title,requested_scope,scope_kind,page_start,page_end,section_title,
-                   subsection_title,section_page_start,section_page_end,display_key,created_at,updated_at)
+                   subsection_title,section_page_start,section_page_end,display_key,created_at,updated_at,parent_artifact_id)
                    VALUES(:id,:user_id,:conversation_id,:capability_id,:artifact_type,:title,:mime_type,
                    :source_label,:source_path,:relevant_text,:page_number,:section,:actions_json,:metadata_json,
                    :source_artifact_id,:source_title,:requested_scope,:scope_kind,:page_start,:page_end,:section_title,
-                   :subsection_title,:section_page_start,:section_page_end,:display_key,:created_at,:updated_at)
+                   :subsection_title,:section_page_start,:section_page_end,:display_key,:created_at,:updated_at,:parent_artifact_id)
                    ON CONFLICT(id) DO UPDATE SET title=excluded.title,relevant_text=excluded.relevant_text,
                    section=excluded.section,actions_json=excluded.actions_json,metadata_json=excluded.metadata_json,
                    requested_scope=excluded.requested_scope,scope_kind=excluded.scope_kind,page_start=excluded.page_start,
@@ -348,6 +354,7 @@ class ArtifactStore:
             "source_artifact_id": item.get("source_artifact_id"),
             "source_title": item.get("source_title") or item["title"],
             "source_capability": item.get("capability_id"),
+            "parent_artifact_id": item.get("parent_artifact_id") or None,
             "requested_scope": item.get("requested_scope") or "",
             "page_start": page_start, "page_end": page_end,
             "section_title": item.get("section_title") or item.get("section"),

@@ -14,11 +14,12 @@ from .conftest import login
 def test_registry_is_versioned_and_gateway_executes_registered_tier_zero(client):
     login(client, "admin")
     listing = client.get("/api/capabilities").json()
-    assert listing["registry_version"] == "3.2.0"
+    assert listing["registry_version"] == "4.0.0"
     ids = {item["id"] for item in listing["capabilities"]}
     assert {"system.health.read", "web.current.search", "adas.coverage.read", "project.list", "settings.voice.read", "settings.voice.update"} <= ids
     assert "service.calibration_iq.start" in ids
     assert "artifact.recent.read" in ids
+    assert {"job.status", "job.cancel", "builder.workspace.create", "builder.sandbox.exec", "media.image.generate", "media.video.generate"} <= ids
     result = client.post("/api/capabilities/system.health.read", json={"arguments": {}})
     assert result.status_code == 200
     assert result.json()["authorization"]["allowed"] is True
