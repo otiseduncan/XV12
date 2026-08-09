@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import subprocess
@@ -9,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from .capabilities.adas_inventory import AdasSourceInventory
 from .config import Settings
 
 
@@ -18,74 +20,157 @@ def _connect_adas(path: Path) -> sqlite3.Connection:
     return connection
 
 
+def _adas_source_inventory(arguments: dict[str, Any]) -> dict[str, Any]:
+    source_root = Path(os.getenv("XV12_ADAS_SI_SOURCE_ROOT", r"X:\ADAS SI"))
+    if not source_root.is_dir():
+        return {
+            "status": "unavailable",
+            "source": "ADAS SI",
+            "message": "The authoritative ADAS SI source library is unavailable.",
+            "applications": [],
+        }
+
+    snapshot = AdasSourceInventory(source_root).snapshot()
+    year = arguments.get("year")
+    make = str(arguments.get("make") or "").strip()
+    model = str(arguments.get("model") or "").strip()
+    applications = list(snapshot.get("applications") or [])
+    if year:
+        applications = [item for item in applications if int(item.get("year") or 0) == int(year)]
+    if make:
+        applications = [item for item in applications if str(item.get("make") or "").casefold() == make.casefold()]
+    if model:
+        applications = [item for item in applications if model.casefold() in str(item.get("model") or "").casefold()]
+
+    return {
+        "status": "success",
+        "source": "ADAS SI",
+        "authoritative": True,
+        "filters": {"make": make or None, "model": model or None, "year": year},
+        "summary": {
+            **dict(snapshot.get("summary") or {}),
+            "returned_vehicle_application_count": len(applications),
+        },
+        "applications": applications,
+        "unparsed_documents": list(snapshot.get("unparsed_documents") or []),
+        "verification": snapshot.get("verification") or {},
+        "entity_semantics": snapshot.get("entity_semantics") or {},
+        "evidence_contract": snapshot.get("evidence_contract") or {},
+    }
+
+
 def adas_coverage(settings: Settings, arguments: dict[str, Any]) -> dict[str, Any]:
     path = settings.adas_database_path or settings.root / "data/knowledge/adas_knowledge.sqlite"
-    if not path.exists():
-        return {"status": "offline", "message": "XV12 ADAS knowledge database is unavailable."}
     make = str(arguments.get("make") or "").strip()
     model = str(arguments.get("model") or "").strip()
     year = arguments.get("year")
-    clauses, params = ["va.active=1"], []
-    if make:
-        clauses.append("lower(m.name)=lower(?)")
-        params.append(make)
-    if model:
-        clauses.append("lower(vm.name) LIKE lower(?)")
-        params.append(f"%{model}%")
-    if year:
-        clauses.extend(["(va.year_start IS NULL OR va.year_start<=?)", "(va.year_end IS NULL OR va.year_end>=?)"])
-        params.extend([int(year), int(year)])
-    with _connect_adas(path) as db:
-        applications = [
-            dict(row)
-            for row in db.execute(
-                f"""SELECT va.id,va.year_start,va.year_end,va.trim,va.engine,va.applicability_notes,
-                           m.name AS make,vm.name AS model
-                    FROM vehicle_applications va
-                    JOIN vehicle_models vm ON vm.id=va.vehicle_model_id
-                    JOIN manufacturers m ON m.id=vm.manufacturer_id
-                    WHERE {' AND '.join(clauses)} ORDER BY m.name,vm.name,va.year_start""",
-                params,
-            )
-        ]
-        counts = {
-            "documents": int(db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]),
-            "verified_records": int(db.execute("SELECT COUNT(*) FROM verification_records WHERE active=1").fetchone()[0]),
-            "review_items": int(db.execute("SELECT COUNT(*) FROM review_items WHERE status='needs_review'").fetchone()[0]),
-            "active_source_documents": int(db.execute("SELECT COUNT(*) FROM source_documents WHERE active=1").fetchone()[0]),
-        }
+    applications: list[dict[str, Any]] = []
+    counts = {
+        "documents": 0,
+        "verified_records": 0,
+        "review_items": 0,
+        "active_source_documents": 0,
+    }
+    normalized_available = path.exists()
+
+    if normalized_available:
+        clauses, params = ["va.active=1"], []
+        if make:
+            clauses.append("lower(m.name)=lower(?)")
+            params.append(make)
+        if model:
+            clauses.append("lower(vm.name) LIKE lower(?)")
+            params.append(f"%{model}%")
+        if year:
+            clauses.extend(["(va.year_start IS NULL OR va.year_start<=?)", "(va.year_end IS NULL OR va.year_end>=?)"])
+            params.extend([int(year), int(year)])
+        with _connect_adas(path) as db:
+            applications = [
+                dict(row)
+                for row in db.execute(
+                    f"""SELECT va.id,va.year_start,va.year_end,va.trim,va.engine,va.applicability_notes,
+                               m.name AS make,vm.name AS model
+                        FROM vehicle_applications va
+                        JOIN vehicle_models vm ON vm.id=va.vehicle_model_id
+                        JOIN manufacturers m ON m.id=vm.manufacturer_id
+                        WHERE {' AND '.join(clauses)} ORDER BY m.name,vm.name,va.year_start""",
+                    params,
+                )
+            ]
+            counts = {
+                "documents": int(db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]),
+                "verified_records": int(db.execute("SELECT COUNT(*) FROM verification_records WHERE active=1").fetchone()[0]),
+                "review_items": int(db.execute("SELECT COUNT(*) FROM review_items WHERE status='needs_review'").fetchone()[0]),
+                "active_source_documents": int(db.execute("SELECT COUNT(*) FROM source_documents WHERE active=1").fetchone()[0]),
+            }
+
+    source_inventory = _adas_source_inventory(arguments)
     explicit_summary = {
         "normalized_document_rows": counts["documents"],
         "active_verification_record_rows": counts["verified_records"],
         "review_items_needing_review": counts["review_items"],
         "active_normalized_source_document_rows": counts["active_source_documents"],
-        "returned_vehicle_application_rows": len(applications),
+        "returned_normalized_vehicle_application_rows": len(applications),
     }
+    source_has_records = source_inventory.get("status") == "success" and bool(source_inventory.get("applications"))
+    normalized_has_records = bool(applications)
+    if source_has_records or normalized_has_records:
+        domain_status = "verified"
+    elif normalized_available or source_inventory.get("status") == "success":
+        domain_status = "no_result"
+    else:
+        domain_status = "offline"
+
     return {
-        "status": "verified" if applications else "no_result",
+        "status": domain_status,
         "filters": {"make": make or None, "model": model or None, "year": year},
         "coverage": counts,
         "coverage_summary": explicit_summary,
         "applications": applications,
+        "normalized_database": {
+            "available": normalized_available,
+            "applications": applications,
+            "coverage": counts,
+            "summary": explicit_summary,
+            "source": "xv12_owned_adas_database",
+        },
+        "authoritative_source_inventory": source_inventory,
+        "answering_guidance": {
+            "adas_si_source_library_questions": "Use authoritative_source_inventory. This includes the year/make/model applications derived from the actual authorized ADAS SI source library.",
+            "normalized_database_questions": "Use normalized_database. Its rows and pipeline metrics are separate from the ADAS SI source-library inventory.",
+            "all_or_unique_vehicle_requests": "For requests to list all vehicles or count unique vehicle applications in ADAS SI, use authoritative_source_inventory.applications and authoritative_source_inventory.summary.vehicle_application_count.",
+            "never_equate": [
+                "normalized document rows with vehicle applications",
+                "verification record rows with verified vehicles",
+                "review items with unverified vehicles",
+                "normalized source rows with authoritative source-library PDFs",
+            ],
+        },
         "entity_semantics": {
             "coverage.documents": "Rows in the normalized XV12 documents table; not a vehicle-application count.",
             "coverage.verified_records": "Active rows in the normalized verification_records table; not a vehicle-application count and not the operator verification state of X:\\ADAS SI.",
             "coverage.review_items": "Rows currently marked needs_review in the normalized review queue; not unverified vehicles.",
             "coverage.active_source_documents": "Active rows in the normalized source_documents table; not the authoritative X:\\ADAS SI PDF inventory.",
             "applications": "Vehicle-application rows actually returned by this normalized database query.",
+            "authoritative_source_inventory.applications": "Unique year/make/model applications derived from the actual ADAS SI source-document inventory.",
             "counts_are_not_interchangeable": True,
         },
         "enumeration": {
             "normalized_vehicle_rows_in_this_result": len(applications),
+            "authoritative_source_vehicle_rows_in_this_result": len(source_inventory.get("applications") or []),
             "authoritative_source_inventory_capability": "adas.si.inventory.read",
-            "instruction": "Use the ADAS SI inventory capability for the authoritative source-library document and year/make/model inventory. Do not subtract unrelated counts to invent records.",
+            "instruction": "For ADAS SI source-library inventory, answer from authoritative_source_inventory. Do not subtract unrelated counts to invent records.",
         },
         "evidence_contract": {
             "authoritative_records_only": True,
-            "specific_records_must_come_from_applications": True,
+            "specific_records_must_come_from_returned_application_rows": True,
             "do_not_infer_records_from_counts": True,
         },
-        "evidence": {"source": "xv12_owned_adas_database", "read_only": True},
+        "evidence": {
+            "normalized_database": "xv12_owned_adas_database" if normalized_available else "unavailable",
+            "authoritative_source_library": source_inventory.get("status"),
+            "read_only": True,
+        },
     }
 
 
