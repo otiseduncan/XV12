@@ -1,6 +1,6 @@
 ﻿{
     "baseline":  "XODUZ XV12 Baseline 1",
-    "generated_at":  "2026-08-09T06:00:38.6152761-04:00",
+    "generated_at":  "2026-08-09T06:02:58.0726337-04:00",
     "tag":  "xv12-baseline-core-v1",
     "model":  {
                   "filename":  "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
@@ -64,7 +64,7 @@
                      "migration":  "0001_baseline_core"
                  },
     "capability_registry_version":  "1.0.0",
-    "configuration_sha256":  "c9ae15bf65d2971a5b00bc9596212b490116d7554b87014959c88e867de1b03b",
+    "configuration_sha256":  "4b001d26ea9672e700b9c1c61e026f9213ab9597fcb4089ff44a1e12c732e20a",
     "avatar_assets":  [
                           {
                               "name":  "xoduz-512.png",
@@ -115,7 +115,7 @@
                                    },
                        "standalone_audit":  {
                                                 "result":  "PASS",
-                                                "scanned_files":  41,
+                                                "scanned_files":  42,
                                                 "donor_runtime_references":  0,
                                                 "outside_runtime_paths":  0
                                             }
