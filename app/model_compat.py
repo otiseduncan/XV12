@@ -18,6 +18,30 @@ PARAMETER_BLOCK = re.compile(
 )
 
 
+def artifact_followup_arguments(message: str, allowed_names: set[str]) -> dict[str, Any] | None:
+    folded = message.casefold().strip()
+    if "artifact_recent_read" not in allowed_names:
+        return None
+    retrieval_tools = {"adas_si_search", "adas_knowledge_search", "web_current_search", "files_local_read"}
+    if allowed_names & retrieval_tools:
+        return None
+    action = next((name for name in ("display", "view", "open", "print", "download", "copy", "show") if name in folded), None)
+    referential = bool(re.search(r"\b(?:document|manual|pdf|file|section|page)\b|\b(?:open|print|download|copy|display)\s+it\b", folded))
+    if not action or not referential:
+        return None
+    arguments: dict[str, Any] = {"action": {"open": "view", "show": "display"}.get(action, action)}
+    page = re.search(r"\bpage\s+(\d+)\b", folded)
+    if page:
+        arguments.update({"scope": "page", "page": int(page.group(1))})
+    elif re.search(r"\b(?:whole|entire|complete|full)\b.*\b(?:document|manual|pdf|file)\b", folded):
+        arguments["scope"] = "full"
+    elif re.search(r"\b(?:whole|entire|complete|full)\b.*\bsection\b", folded):
+        arguments["scope"] = "section"
+    else:
+        arguments["scope"] = "current"
+    return arguments
+
+
 def _value(text: str) -> Any:
     value = text.strip()
     try:
@@ -85,16 +109,24 @@ class ToolCallCompatibilityModel:
             for item in (tools or [])
             if item.get("function", {}).get("name")
         }
+        last_user_message = next((str(item.get("content") or "") for item in reversed(messages) if item.get("role") == "user"), "")
+        has_tool_result = any(item.get("role") == "tool" for item in messages)
+        required_artifact_arguments = None if has_tool_result else artifact_followup_arguments(last_user_message, allowed_names)
         pending = ""
         capturing = False
+        emitted_tool_call = False
         async for event in self.model.stream_events(messages, tools=tools):
             if event.get("type") != "content" or not allowed_names:
-                if pending and not capturing:
+                if event.get("type") == "tool_call":
+                    emitted_tool_call = True
+                if pending and not capturing and required_artifact_arguments is None:
                     yield {"type": "content", "text": pending}
                     pending = ""
                 yield event
                 continue
             pending += str(event.get("text") or "")
+            if required_artifact_arguments is not None:
+                continue
             if capturing:
                 continue
             match = FUNCTION_OPEN.search(pending)
@@ -111,8 +143,14 @@ class ToolCallCompatibilityModel:
             calls = parse_text_tool_calls(pending, allowed_names)
             if calls:
                 for call in calls:
+                    emitted_tool_call = True
                     yield call
             else:
                 yield {"type": "content", "text": "I couldn't complete that capability call safely."}
-        elif pending:
+        elif pending and required_artifact_arguments is None:
             yield {"type": "content", "text": pending}
+        if required_artifact_arguments is not None and not emitted_tool_call:
+            yield {
+                "type": "tool_call", "id": f"artifact_{uuid.uuid4().hex}", "name": "artifact_recent_read",
+                "arguments": json.dumps(required_artifact_arguments, ensure_ascii=False),
+            }

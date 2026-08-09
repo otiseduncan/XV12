@@ -262,7 +262,7 @@ function renderConversation() {
 
 function artifactUrl(artifact, download = false) {
   const base = artifact.reference || artifact.preview?.url || ""; if (!base) return "";
-  const page = artifact.preview?.page || artifact.metadata?.page; const query = download ? `${base.includes("?") ? "&" : "?"}download=true` : base;
+  const page = artifact.preview?.page || artifact.metadata?.page; const query = download ? `${base}${base.includes("?") ? "&" : "?"}download=true` : base;
   return page && !download ? `${query}#page=${page}` : query;
 }
 
@@ -289,11 +289,15 @@ async function writeClipboardText(text) {
 }
 
 function appendArtifact(container, artifact) {
-  const article = document.createElement("article"); article.className = `artifact-card artifact-${String(artifact.type || "file").replace(/[^a-z_-]/gi, "")}`; article.dataset.artifactId = artifact.id || "";
-  const page = artifact.metadata?.page || artifact.preview?.page; const section = artifact.metadata?.section;
+  const displayKey = artifact.display_key || [artifact.source_artifact_id || artifact.id, artifact.page_start, artifact.page_end, artifact.section_title].filter((value) => value !== null && value !== undefined).join(":");
+  const duplicate = [...messages.querySelectorAll(".artifact-card")].find((item) => item.dataset.artifactKey === displayKey); if (duplicate) duplicate.remove();
+  const article = document.createElement("article"); article.className = `artifact-card artifact-${String(artifact.type || "file").replace(/[^a-z_-]/gi, "")}`; article.dataset.artifactId = artifact.id || ""; article.dataset.artifactKey = displayKey;
+  const pageStart = artifact.page_start ?? artifact.metadata?.page_start ?? artifact.metadata?.page; const pageEnd = artifact.page_end ?? artifact.metadata?.page_end ?? pageStart;
+  const pageLabel = pageStart ? (pageEnd && pageEnd !== pageStart ? `Pages ${pageStart}–${pageEnd}` : `Page ${pageStart}`) : "";
+  const section = [artifact.section_title || artifact.metadata?.section, artifact.subsection_title || artifact.metadata?.subsection].filter(Boolean).join(" — ");
   article.innerHTML = `<header><div class="artifact-mark">▧</div><div class="artifact-heading"><strong></strong><span></span></div></header><div class="artifact-preview"></div><div class="artifact-actions"></div>`;
   article.querySelector("strong").textContent = artifact.title || "Artifact";
-  article.querySelector(".artifact-heading span").textContent = [artifact.source, page ? `Page ${page}` : "", section || ""].filter(Boolean).join(" · ");
+  article.querySelector(".artifact-heading span").textContent = [artifact.source, pageLabel, section].filter(Boolean).join(" · ");
   const preview = article.querySelector(".artifact-preview"), url = artifactUrl(artifact);
   if (artifact.type === "image" && url) {
     const image = document.createElement("img"); image.src = url; image.alt = artifact.title || "Generated image"; image.loading = "lazy"; preview.append(image);
@@ -310,9 +314,11 @@ function appendArtifact(container, artifact) {
   } else { preview.classList.add("hidden"); }
   const actions = article.querySelector(".artifact-actions");
   if (url) { const view = document.createElement("a"); view.href = url; view.target = "_blank"; view.rel = "noopener"; view.textContent = "View"; actions.append(view); }
-  if (artifact.downloadable && artifact.reference) { const download = document.createElement("a"); download.href = artifactUrl(artifact, true); download.textContent = "Download"; actions.append(download); }
-  if (artifact.printable && url) { const print = document.createElement("button"); print.type = "button"; print.textContent = "Print"; print.addEventListener("click", () => { const popup = window.open(url, "_blank"); if (popup) { popup.opener = null; popup.addEventListener("load", () => setTimeout(() => popup.print(), 700), { once: true }); } }); actions.append(print); }
+  const scoped = artifact.metadata?.scope_kind && artifact.metadata.scope_kind !== "full";
+  if (artifact.downloadable && artifact.reference) { const download = document.createElement("a"); download.href = artifactUrl(artifact, true); download.textContent = scoped ? (pageStart === pageEnd ? "Download Page" : "Download Section") : "Download"; actions.append(download); }
+  if (artifact.printable && url) { const print = document.createElement("button"); print.type = "button"; print.textContent = scoped ? (pageStart === pageEnd ? "Print Page" : "Print Section") : "Print"; print.addEventListener("click", () => { const popup = window.open(url, "_blank"); if (popup) { popup.opener = null; popup.addEventListener("load", () => setTimeout(() => popup.print(), 700), { once: true }); } }); actions.append(print); }
   if (artifact.copyable) { const copy = document.createElement("button"); copy.type = "button"; copy.textContent = artifact.mime_type === "application/pdf" ? "Copy text" : "Copy"; copy.addEventListener("click", () => copyArtifact(artifact)); actions.append(copy); }
+  if (artifact.full_document_reference) { const full = document.createElement("a"); full.href = artifact.full_document_reference; full.target = "_blank"; full.rel = "noopener"; full.textContent = "Full Document"; actions.append(full); }
   if (!preview.classList.contains("hidden")) { const collapse = document.createElement("button"); collapse.type = "button"; collapse.textContent = "Collapse"; collapse.addEventListener("click", () => { preview.classList.toggle("hidden"); collapse.textContent = preview.classList.contains("hidden") ? "Expand" : "Collapse"; }); actions.append(collapse); }
   container.append(article);
 }

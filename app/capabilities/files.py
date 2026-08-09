@@ -38,11 +38,22 @@ class LocalFilesCapability:
         data = path.read_bytes()
         return {"path": str(path), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(), "modified_ns": path.stat().st_mtime_ns}
 
-    def _artifact(self, path: Path, user: dict[str, Any], relevant_text: str = "") -> list[dict[str, Any]]:
+    def _artifact(self, path: Path, user: dict[str, Any], relevant_text: str = "", arguments: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         if self.artifacts is None:
             return []
+        arguments = arguments or {}
+        page_start = int(arguments["page_start"]) if arguments.get("page_start") else None
+        page_end = int(arguments.get("page_end") or page_start) if page_start else None
+        scoped_title = path.name if not page_start else f"{path.stem} — {'Page' if page_start == page_end else 'Pages'} {page_start if page_start == page_end else f'{page_start}–{page_end}'}"
         try:
-            return [self.artifacts.register_file(user_id=user["id"], capability_id="files.local.read", source_path=path, title=path.name, source_label="Local Files", relevant_text=relevant_text)]
+            return [self.artifacts.register_file(
+                user_id=user["id"], capability_id="files.local.read", source_path=path,
+                title=scoped_title, source_title=path.name, source_label="Local Files",
+                requested_scope=str(arguments.get("requested_scope") or ""),
+                scope_kind="page" if page_start == page_end and page_start else "section" if page_start else "full",
+                page_start=page_start, page_end=page_end, section_title=str(arguments.get("section") or "") or None,
+                relevant_text=relevant_text,
+            )]
         except ValueError:
             return []
 
@@ -59,9 +70,9 @@ class LocalFilesCapability:
         maximum = min(max(int(arguments.get("max_bytes") or 131072), 1), 524288)
         data = path.read_bytes()
         if b"\x00" in data[:4096]:
-            return {"status": "partial_success", **self._metadata(path), "message": "Binary file metadata returned; content was not decoded.", "artifacts": self._artifact(path, _user)}
+            return {"status": "partial_success", **self._metadata(path), "message": "Binary file metadata returned; content was not decoded.", "artifacts": self._artifact(path, _user, arguments=arguments)}
         content = data[:maximum].decode("utf-8", errors="replace")
-        return {"status": "success", **self._metadata(path), "content": content, "truncated": len(data) > maximum, "artifacts": self._artifact(path, _user, content)}
+        return {"status": "success", **self._metadata(path), "content": content, "truncated": len(data) > maximum, "artifacts": self._artifact(path, _user, content, arguments)}
 
     def write(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         path = self._managed_path(str(arguments.get("path") or ""), user)

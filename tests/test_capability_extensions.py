@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from pypdf import PdfReader
 
 from app.capabilities.adas_si import AdasSICapability
 from app.capabilities.calibration_iq import CalibrationIQCapability
@@ -63,9 +64,15 @@ def test_real_audi_a5_lane_change_search_returns_page_evidence(tmp_path: Path) -
     assert any("2018 Audi A5 electronics.pdf" in item["source"] for item in evidence)
     assert any(291 <= item["page"] <= 298 for item in evidence)
     assert result["broader_search_performed"] is True
-    assert result["artifacts"][0]["title"] == "2018 Audi A5 electronics.pdf"
+    assert result["artifacts"][0]["title"] == "Lane Change Assistance — Calibration"
     assert result["artifacts"][0]["source"] == "ADAS SI"
-    assert result["artifacts"][0]["metadata"]["page"] in range(291, 299)
+    assert result["artifacts"][0]["source_title"] == "2018 Audi A5 electronics.pdf"
+    assert (result["artifacts"][0]["page_start"], result["artifacts"][0]["page_end"]) == (290, 298)
+    assert result["artifacts"][0]["metadata"]["section_page_start"] == 289
+    assert result["artifacts"][0]["metadata"]["section_page_end"] == 298
+    record = artifact_store.get_owned(result["artifacts"][0]["id"], ADMIN["id"])
+    assert record is not None and len(PdfReader(str(artifact_store.materialize(record))).pages) == 9
+    assert len(PdfReader(str(artifact_store.materialize(record, full=True))).pages) == 363
     assert str(source) not in str(result)
 
 

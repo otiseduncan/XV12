@@ -56,6 +56,74 @@ class AdasSICapability:
             db.executemany("INSERT INTO pages(path,page,text,source_mtime_ns) VALUES(?,?,?,?)", [(str(path), number, text, mtime) for number, text in pages])
         return pages
 
+    @staticmethod
+    def _headings(pages: list[tuple[int, str]]) -> list[dict[str, Any]]:
+        headings: list[dict[str, Any]] = []
+        pattern = re.compile(r"(?m)^\s*(\d+(?:\.\d+)*)\s+([A-Z][^\n]{2,120})\s*$")
+        for page, text in pages:
+            for match in pattern.finditer(text):
+                if int(match.group(1).split(".")[0]) > 50:
+                    continue
+                title = re.sub(r"\s+", " ", match.group(2)).strip(" .")
+                if "copyright" not in title.casefold():
+                    headings.append({"number": match.group(1), "title": title, "page": page})
+        return headings
+
+    @classmethod
+    def _procedure_scope(cls, pages: list[tuple[int, str]], best_page: int, query: str) -> dict[str, Any]:
+        headings = cls._headings(pages)
+        query_tokens = {token for token in re.findall(r"[a-z0-9]+", query.casefold()) if len(token) > 2}
+        candidates = []
+        for heading in headings:
+            if int(heading["page"]) > best_page:
+                continue
+            title_tokens = {token for token in re.findall(r"[a-z0-9]+", str(heading["title"]).casefold()) if len(token) > 2}
+            overlap = len(query_tokens & title_tokens)
+            calibration_bonus = 4 if "calibrat" in str(heading["title"]).casefold() and "calibrat" in query.casefold() else 0
+            candidates.append((overlap + calibration_bonus, int(heading["page"]), heading))
+        selected = max(candidates, key=lambda item: (item[0], item[1]))[2] if candidates and max(item[0] for item in candidates) > 0 else None
+        if not selected:
+            return {
+                "page_start": best_page, "page_end": best_page, "section_page_start": best_page,
+                "section_page_end": best_page, "artifact_title": "Relevant source page",
+                "section_title": "Relevant source page", "subsection_title": None, "procedure_heading": None,
+            }
+        number = str(selected["number"])
+        level = len(number.split("."))
+        start = int(selected["page"])
+        next_peer = next(
+            (item for item in headings if int(item["page"]) > start and len(str(item["number"]).split(".")) <= level),
+            None,
+        )
+        end = min((int(next_peer["page"]) - 1) if next_peer else start + 8, pages[-1][0], start + 12)
+        parent_number = number.split(".")[0]
+        parent = next(
+            (item for item in reversed(headings) if int(item["page"]) <= start and str(item["number"]) == parent_number),
+            selected,
+        )
+        section_start = int(parent["page"])
+        next_section = next(
+            (item for item in headings if int(item["page"]) > section_start and str(item["number"]).split(".")[0] != parent_number),
+            None,
+        )
+        section_end = min((int(next_section["page"]) - 1) if next_section else end, pages[-1][0])
+        raw_title = str(selected["title"])
+        artifact_title = re.sub(r",\s*Calibrating\b", " — Calibration", raw_title, flags=re.IGNORECASE)
+        subsection = "Calibration" if "calibrat" in raw_title.casefold() else raw_title
+        procedure_heading = None
+        for page, text in pages:
+            if start <= page <= end:
+                match = re.search(r"(?mi)^\s*((?:Calibrating\s+)?Procedure)\s*$", text)
+                if match:
+                    procedure_heading = re.sub(r"\s+", " ", match.group(1)).strip()
+                    break
+        return {
+            "page_start": start, "page_end": max(start, end),
+            "section_page_start": section_start, "section_page_end": max(section_start, section_end),
+            "artifact_title": artifact_title, "section_title": str(parent["title"]),
+            "subsection_title": subsection, "procedure_heading": procedure_heading,
+        }
+
     def search(self, arguments: dict[str, Any], _user: dict[str, Any]) -> dict[str, Any]:
         query = str(arguments.get("query") or "").strip()
         if not query:
@@ -64,9 +132,12 @@ class AdasSICapability:
         results = []
         candidates = self._candidates(query)
         source_lookup = {path.name: path for path in candidates}
+        page_lookup: dict[str, list[tuple[int, str]]] = {}
         for path in candidates:
             try:
-                for page, text in self._pages(path):
+                pages = self._pages(path)
+                page_lookup[path.name] = pages
+                for page, text in pages:
                     folded = text.casefold()
                     score = sum(min(folded.count(token), 3) for token in tokens)
                     score += 5 if "lane change assistance" in folded else 0
@@ -85,13 +156,20 @@ class AdasSICapability:
         best = next((item for item in ranked if item.get("excerpt") and item.get("source") in source_lookup), None)
         if best and self.artifacts is not None:
             try:
+                scope = self._procedure_scope(page_lookup[str(best["source"])], int(best["page"]), query)
+                scoped_text = "\n\n".join(
+                    text for page, text in page_lookup[str(best["source"])]
+                    if int(scope["page_start"]) <= page <= int(scope["page_end"])
+                )
                 artifacts.append(
                     self.artifacts.register_file(
                         user_id=_user["id"], capability_id="adas.si.search",
-                        source_path=source_lookup[str(best["source"])], title=str(best["source"]),
-                        source_label="ADAS SI", page=int(best["page"]),
-                        section="Lane Change Assistance calibration" if "lane change" in query.casefold() else None,
-                        relevant_text=str(best["excerpt"]), metadata={"query": query},
+                        source_path=source_lookup[str(best["source"])], title=str(scope["artifact_title"]),
+                        source_title=str(best["source"]), source_label="ADAS SI", requested_scope=query,
+                        scope_kind="procedure", page_start=int(scope["page_start"]), page_end=int(scope["page_end"]),
+                        section_title=str(scope["section_title"]), subsection_title=scope["subsection_title"],
+                        section_page_start=int(scope["section_page_start"]), section_page_end=int(scope["section_page_end"]),
+                        relevant_text=scoped_text, metadata={"query": query, "evidence_page": int(best["page"]), "procedure_heading": scope["procedure_heading"]},
                     )
                 )
             except ValueError:

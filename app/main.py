@@ -112,7 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         conversation_id = active_conversation_id()
         message = active_user_message().casefold().strip()
         referential_action = any(action in message for action in ("display", "open", "view", "print", "download", "copy", "show"))
-        referential_object = any(reference in message for reference in ("the document", "that document", "this document", "the file", "that file", "the pdf", "that pdf", "this pdf", "that page", "this page", "print it", "download it", "copy it", "open it", "display it"))
+        referential_object = any(reference in message for reference in ("the document", "that document", "this document", "whole document", "entire document", "full document", "the file", "that file", "the pdf", "that pdf", "this pdf", "that page", "this page", "the section", "that section", "this section", "whole section", "entire section", "next page", "previous page", "print it", "download it", "copy it", "open it", "display it")) or bool(re.search(r"\bpage\s+\d+\b|\b(?:whole|entire|complete|full)\b.*\bsection\b", message))
         asks_for_new_source = any(phrase in message for phrase in ("another document", "different document", "new document", "search for", "find a document"))
         has_recent = bool(conversation_id and artifact_store.recent_records(user["id"], conversation_id, "", 1))
         if not (referential_action and referential_object and has_recent and not asks_for_new_source):
@@ -193,18 +193,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             records = artifact_store.recent_records(
                 user["id"], conversation_id, "", int(arguments.get("limit") or 3)
             )
-        artifacts = []
+        authorized_records = []
         for item in records:
             try:
                 decision = registry.authorize(str(item["capability_id"]), user)
             except (KeyError, CapabilityDenied, CapabilityNotFound):
                 continue
             if decision.allowed:
-                artifact = artifact_store.public(item)
-                if arguments.get("page"):
-                    artifact["preview"]["page"] = int(arguments["page"])
-                    artifact["metadata"]["page"] = int(arguments["page"])
-                artifacts.append(artifact)
+                authorized_records.append(item)
+        artifacts = []
+        if authorized_records:
+            current = authorized_records[0]
+            message = active_user_message().casefold()
+            requested_scope = "current"
+            if any(phrase in message for phrase in ("whole document", "entire document", "full document", "whole manual", "entire manual")):
+                requested_scope = "full"
+            elif "section" in message and any(word in message for word in ("whole", "entire", "complete", "full")):
+                requested_scope = "section"
+            page_match = re.search(r"\bpage\s+(\d+)\b", message)
+            requested_page = int(page_match.group(1)) if page_match else None
+            if requested_page:
+                requested_scope = "page"
+            elif "next page" in message:
+                requested_scope, requested_page = "page", int(current.get("page_end") or current.get("page_start") or 0) + 1
+            elif "previous page" in message:
+                requested_scope, requested_page = "page", max(1, int(current.get("page_start") or 2) - 1)
+            try:
+                if requested_scope == "current":
+                    artifacts.append(artifact_store.public(current))
+                else:
+                    artifacts.append(
+                        artifact_store.derive(
+                            current, scope_kind=requested_scope, page_start=requested_page,
+                            requested_scope=active_user_message(),
+                        )
+                    )
+            except ValueError:
+                artifacts = []
         return {
             "status": "success" if artifacts else "no_result",
             "artifacts": artifacts,

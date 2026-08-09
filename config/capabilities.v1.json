@@ -1,5 +1,5 @@
 {
-  "registry_version": "3.1.0",
+  "registry_version": "3.2.0",
   "capabilities": [
     {
       "id": "system.health.read", "family": "system",
@@ -43,18 +43,18 @@
     },
     {
       "id": "files.local.read", "family": "files", "family_label": "Local Files", "family_description": "Bounded structured local filesystem access without shell execution.",
-      "description": "List a configured directory or read bounded text and metadata from a configured local path.",
+      "description": "List a configured directory or read bounded text and metadata from a configured local path. For a PDF page or section request, pass the smallest supporting page_start/page_end scope; full source access remains secondary.",
       "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
       "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]},
-      "arguments_schema": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 250}, "max_bytes": {"type": "integer", "minimum": 1, "maximum": 524288}}, "additionalProperties": false},
+      "arguments_schema": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 250}, "max_bytes": {"type": "integer", "minimum": 1, "maximum": 524288}, "requested_scope": {"type": "string", "maxLength": 500}, "page_start": {"type": "integer", "minimum": 1}, "page_end": {"type": "integer", "minimum": 1}, "section": {"type": "string", "maxLength": 240}}, "additionalProperties": false},
       "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "bounded-local-files", "idempotency": "safe"
     },
     {
       "id": "artifact.recent.read", "family": "artifacts", "family_label": "Conversation Artifacts", "family_description": "Secure references to material already retrieved in this conversation.",
-      "description": "Return recent user-authorized artifacts already retrieved in this conversation. Use this for follow-ups such as display the document, open it, print that, download it, show page N, copy the text, or summarize this section. Do not repeat the originating search when this returns the requested artifact.",
+      "description": "Return or rescope the current user-authorized artifact already retrieved in this conversation. Use this for display/open/print/download/copy follow-ups, exact page requests, whole-section expansion, and full-document expansion. Preserve the current source reference and never repeat the originating search when it is available.",
       "version": "1.0.0", "risk_tier": 0, "platform_service": true, "authorization": {"roles": ["admin", "user"]},
       "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]},
-      "arguments_schema": {"type": "object", "properties": {"title": {"type": "string", "maxLength": 240}, "action": {"type": "string", "enum": ["display", "view", "download", "print", "copy", "summarize"]}, "page": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 10}}, "additionalProperties": false},
+      "arguments_schema": {"type": "object", "properties": {"title": {"type": "string", "maxLength": 240}, "action": {"type": "string", "enum": ["display", "view", "download", "print", "copy", "summarize"]}, "scope": {"type": "string", "enum": ["current", "page", "section", "full"]}, "page": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 10}}, "additionalProperties": false},
       "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available", "execution_environment": "xv12-artifact-store", "idempotency": "safe"
     },
     {
