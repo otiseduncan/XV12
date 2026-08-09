@@ -9,7 +9,7 @@ The Creator stack is a modular service layer behind the existing versioned capab
 - `WorkspaceService` creates and reopens managed workspaces, provides bounded reads, optimistic single-file writes, rollback-safe atomic batches, inspection, and secret-excluding archives.
 - `SandboxService` executes argv inside Docker with a single owned workspace mount, resource limits, dropped capabilities, read-only container root, no Docker socket, and network disabled by default.
 - `PreviewService` owns only labeled Creator preview containers and exposes them on loopback ports.
-- `BrowserService` limits Chromium to owned loopback previews and returns bounded inspection evidence or screenshot artifacts.
+- `BrowserService` limits Chromium to owned loopback previews and returns bounded DOM, console, JavaScript exception, failed-network, optional-click, and screenshot evidence through the DevTools protocol.
 - `GitService` uses fixed argv operations inside owned workspaces. Pull is fast-forward-only and push has no force/refspec interface.
 - `SecretsBroker` stores environment-variable references and permitted contexts only. Resolution occurs internally at execution time.
 - `MediaService` provides provider-neutral image/edit/video contracts. Generated files enter the existing Artifact Store.
@@ -67,13 +67,13 @@ Secret values are inherited by Docker only for named, configured, context-author
 
 Creator workspaces and completed artifacts are durable user-owned state and are not automatically deleted. Preview containers are individually owned and stopped only by exact preview ID. Temporary browser profiles and intermediate video source frames are removed after use. Archives exclude `.git`, dependency directories, `.env*`, Creator receipt/archive directories, and secret files.
 
-On service startup, jobs left queued/running/cancelling are marked failed with `service_restarted`; they are never falsely reported as complete. The original workspace and any already-registered artifacts remain intact for inspection or retry.
+On service startup, jobs left queued/running/cancelling are marked failed with `service_restarted`; they are never falsely reported as complete. Managed preview records are reconciled against their exact owned containers and stale records become stopped. The original workspace and any already-registered artifacts remain intact for inspection or retry.
 
 Backup the Creator SQLite database with SQLite's backup API and copy the Creator workspace/media tree while XV12 is stopped or after files have quiesced. Verify the database with `PRAGMA integrity_check`, verify every SHA-256 manifest entry, and use the repository Git bundle as the history recovery source.
 
 ## Validation
 
-`tests/test_creator_stack.py` behaviorally verifies registry/health truth, user ownership, path traversal blocking, atomic batches, secret non-disclosure, Docker isolation, explicit network policy, actual application build/test/preview, Chromium inspection and screenshot, project download, actual image/edit lineage, asynchronous playable video generation, restart reconciliation, and a real chat tool loop that builds then edits and retests the same workspace.
+`tests/test_creator_stack.py` behaviorally verifies registry/health truth, user ownership, path traversal blocking, atomic batches, secret non-disclosure, Docker isolation, explicit network policy, actual application build/test/preview, Chromium DOM/console/runtime/network/click inspection and screenshot, project download, actual image/edit lineage, asynchronous playable video generation, cooperative cancellation, job/preview restart reconciliation, Git status/diff/commit/push/pull, and a real chat tool loop that builds then edits and retests the same workspace.
 
 Run:
 

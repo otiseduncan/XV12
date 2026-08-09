@@ -56,7 +56,7 @@ Capability awareness is generated from `config/capabilities.v1.json`. Ordinary c
 
 ## Creator platform
 
-X can create and edit prompt-driven images, turn an owned image artifact into a playable video job, build applications in durable user-scoped workspaces, execute dependencies/builds/tests in a constrained Docker sandbox, start an isolated local preview, inspect and screenshot it with Chromium, and return project archives and receipts in chat. Follow-up edits reuse stable workspace and artifact IDs.
+X can create and edit prompt-driven images, turn an owned image artifact into a playable video job, build applications in durable user-scoped workspaces, execute dependencies/builds/tests in a constrained Docker sandbox, start an isolated local preview, inspect its DOM/console/network and interactions through Chromium DevTools, capture screenshots, and return project archives and receipts in chat. Follow-up edits reuse stable workspace and artifact IDs.
 
 Creator outputs use the generic chat artifact renderer: images and screenshots display inline, videos have native playback, applications render as sandboxed previews, job cards poll persisted progress and support cancellation, and reports/archives/Git receipts remain downloadable. Normal chat shows bounded summaries rather than raw container or process details.
 

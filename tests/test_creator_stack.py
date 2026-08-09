@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.creator import CreatorStore
+from app.creator import CreatorStore, JobManager, PreviewService
 from .conftest import create_conversation, login
 
 
@@ -113,6 +113,7 @@ def test_actual_builder_application_sandbox_preview_browser_and_archive(client):
         assert preview["artifact"]["type"] == "application"
         inspected = call(client, "browser.preview.inspect", preview_id=preview_id)
         assert inspected["rendered"] is True and inspected["title"] == "Customer Scheduling Console"
+        assert inspected["console_inspected"] is True and inspected["network_inspected"] is True and inspected["healthy"] is True
         screenshot = call(client, "browser.preview.screenshot", preview_id=preview_id, conversation_id=conversation["id"])
         assert screenshot["rendered"] is True and screenshot["artifact"]["type"] == "screenshot"
         archive = call(client, "builder.project.archive", workspace_id=workspace["id"], conversation_id=conversation["id"])
@@ -149,6 +150,53 @@ def test_job_restart_reconciliation_is_persisted(tmp_path: Path):
     CreatorStore(tmp_path / "creator.sqlite", tmp_path / "workspaces").initialize()
     recovered = store.job(queued["id"], "user")
     assert recovered and recovered["state"] == "failed" and recovered["error_code"] == "service_restarted"
+
+
+def test_job_cancellation_and_preview_restart_reconciliation(tmp_path: Path):
+    store = CreatorStore(tmp_path / "creator.sqlite", tmp_path / "workspaces")
+    store.initialize()
+    manager = JobManager(store)
+
+    def slow(_job_id, progress, cancelled):
+        for index in range(100):
+            if cancelled():
+                return {}
+            progress(index, "Synthetic slow work")
+            time.sleep(0.02)
+        return {"completed": True}
+
+    job = manager.submit("user", "conversation", "synthetic.slow", "", {}, slow)
+    store.cancel_job(job["job_id"], "user")
+    deadline, current = time.monotonic() + 5, store.job(job["job_id"], "user")
+    while current and current["state"] not in {"cancelled", "failed", "succeeded"} and time.monotonic() < deadline:
+        time.sleep(0.05)
+        current = store.job(job["job_id"], "user")
+    assert current and current["state"] == "cancelled" and current["progress"] == 100
+    store.set_preview("preview", "user", "workspace", "definitely-not-a-container", 18499, "http://127.0.0.1:18499/")
+    reconciled = PreviewService(store, None).reconcile()
+    assert reconciled == {"checked": 1, "marked_stopped": 1}
+    assert store.preview("preview", "user")["state"] == "stopped"
+
+
+def test_browser_devtools_reports_console_runtime_network_and_click_evidence(client):
+    login(client, "admin")
+    conversation = create_conversation(client)
+    workspace = call(client, "builder.workspace.create", name="Browser diagnostics")["workspace"]
+    call(client, "builder.files.batch", workspace_id=workspace["id"], files=[
+        {"path": "index.html", "content": "<html><head><title>Browser Diagnostics</title></head><body><button id='change'>Change state</button><output id='state'>before</output><script src='app.js'></script></body></html>"},
+        {"path": "app.js", "content": "console.error('creator console proof');fetch('/missing.json');document.querySelector('#change').onclick=()=>document.querySelector('#state').textContent='after';setTimeout(()=>{throw new Error('creator runtime proof')},50);"},
+    ])
+    preview = call(client, "builder.preview.start", workspace_id=workspace["id"], conversation_id=conversation["id"])
+    try:
+        inspected = call(client, "browser.preview.inspect", preview_id=preview["preview"]["id"], click_selector="#change")
+        assert inspected["rendered"] is True and inspected["console_inspected"] is True and inspected["network_inspected"] is True
+        assert inspected["click_performed"] is True and "after" in inspected["body_text"]
+        assert any("console proof" in item["text"] for item in inspected["console"])
+        assert any("runtime proof" in item for item in inspected["runtime_errors"])
+        assert any(item.get("status") == 404 or "missing" in item.get("url", "") for item in inspected["network_failures"])
+        assert inspected["healthy"] is False
+    finally:
+        call(client, "builder.preview.stop", preview_id=preview["preview"]["id"])
 
 
 def test_git_status_diff_commit_push_and_fast_forward_pull(app, client, tmp_path: Path):

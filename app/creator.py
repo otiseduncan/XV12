@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import html
@@ -22,6 +23,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 from urllib.request import Request as UrlRequest, urlopen
+
+import websockets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -224,6 +227,11 @@ class CreatorStore:
     def update_preview(self, preview_id: str, state: str) -> None:
         with self.connect() as db:
             db.execute("UPDATE creator_previews SET state=?,updated_at=? WHERE id=?", (state, utcnow(), preview_id))
+
+    def running_previews(self) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM creator_previews WHERE state='running'").fetchall()
+        return [dict(row) for row in rows]
 
     def configure_secret_ref(self, name: str, environment_name: str, contexts: list[str], admin_id: str) -> dict[str, Any]:
         now = utcnow()
@@ -496,6 +504,19 @@ class PreviewService:
                 return port
         raise RuntimeError("No managed preview port is available.")
 
+    def reconcile(self) -> dict[str, int]:
+        checked = stopped = 0
+        for preview in self.store.running_previews():
+            checked += 1
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Running}}", str(preview["container_ref"])],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0 or result.stdout.strip() != "true":
+                self.store.update_preview(str(preview["id"]), "stopped")
+                stopped += 1
+        return {"checked": checked, "marked_stopped": stopped}
+
     def start(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         workspace_id = str(arguments["workspace_id"])
         root = self.store.safe_path(workspace_id, user["id"], ".", must_exist=True)
@@ -574,23 +595,128 @@ class BrowserService:
             raise ValueError("Browser validation is limited to managed local previews.")
         return preview, str(preview["url"])
 
+    @staticmethod
+    def _collect_devtools(websocket_url: str, url: str, click_selector: str = "") -> dict[str, Any]:
+        async def collect() -> dict[str, Any]:
+            console: list[dict[str, str]] = []
+            runtime_errors: list[str] = []
+            network_failures: list[dict[str, Any]] = []
+
+            def observe(message: dict[str, Any]) -> None:
+                method, params = message.get("method"), message.get("params") or {}
+                if method == "Runtime.consoleAPICalled":
+                    values = [str(item.get("value") if "value" in item else item.get("description") or item.get("type") or "") for item in params.get("args") or []]
+                    console.append({"level": str(params.get("type") or "log"), "text": " ".join(values)[:1000]})
+                elif method == "Runtime.exceptionThrown":
+                    details = params.get("exceptionDetails") or {}
+                    exception = details.get("exception") or {}
+                    runtime_errors.append(str(exception.get("description") or details.get("text") or "JavaScript exception")[:2000])
+                elif method == "Log.entryAdded":
+                    entry = params.get("entry") or {}
+                    entry_url = str(entry.get("url") or "")
+                    if not urlparse(entry_url).path.endswith("/favicon.ico"):
+                        console.append({"level": str(entry.get("level") or "log"), "text": str(entry.get("text") or "")[:1000], "url": entry_url[:500]})
+                elif method == "Network.loadingFailed":
+                    error_text = str(params.get("errorText") or "loading failed")
+                    if error_text != "net::ERR_ABORTED":
+                        network_failures.append({"url": str(params.get("blockedReason") or "request")[:500], "error": error_text[:500]})
+                elif method == "Network.responseReceived":
+                    response = params.get("response") or {}
+                    response_url = str(response.get("url") or "")
+                    if int(response.get("status") or 0) >= 400 and not urlparse(response_url).path.endswith("/favicon.ico"):
+                        network_failures.append({"url": response_url[:500], "status": int(response["status"])})
+
+            async with websockets.connect(websocket_url, max_size=8_000_000, open_timeout=10) as socket:
+                sequence = 0
+
+                async def command(method: str, params: dict[str, Any] | None = None, timeout: float = 10) -> dict[str, Any]:
+                    nonlocal sequence
+                    sequence += 1
+                    request_id = sequence
+                    await socket.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
+                    deadline = time.monotonic() + timeout
+                    while time.monotonic() < deadline:
+                        message = json.loads(await asyncio.wait_for(socket.recv(), timeout=max(0.1, deadline - time.monotonic())))
+                        observe(message)
+                        if message.get("id") == request_id:
+                            return message
+                    raise TimeoutError(f"DevTools command timed out: {method}")
+
+                for method in ("Page.enable", "Runtime.enable", "Log.enable", "Network.enable"):
+                    await command(method)
+                await command("Page.navigate", {"url": url}, timeout=15)
+                settle_until = time.monotonic() + 1.5
+                while time.monotonic() < settle_until:
+                    try:
+                        message = json.loads(await asyncio.wait_for(socket.recv(), timeout=max(0.05, settle_until - time.monotonic())))
+                        observe(message)
+                    except asyncio.TimeoutError:
+                        break
+                click_result = None
+                if click_selector:
+                    expression = f"(()=>{{const e=document.querySelector({json.dumps(click_selector)});if(!e)return false;e.click();return true;}})()"
+                    response = await command("Runtime.evaluate", {"expression": expression, "returnByValue": True})
+                    click_result = bool((((response.get("result") or {}).get("result") or {}).get("value")))
+                expression = "(()=>({title:document.title,body:(document.body?.innerText||'').slice(0,3000),dom:document.documentElement?.outerHTML||''}))()"
+                response = await command("Runtime.evaluate", {"expression": expression, "returnByValue": True})
+                document = (((response.get("result") or {}).get("result") or {}).get("value")) or {}
+            return {"document": document, "console": console[:50], "runtime_errors": runtime_errors[:25],
+                    "network_failures": network_failures[:50], "click_performed": click_result}
+
+        return asyncio.run(collect())
+
     def inspect(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         if not self.browser:
             return {"status": "unavailable", "message": "Chromium browser is not installed."}
         preview, url = self._authorized_url(str(arguments["preview_id"]), user["id"])
         with tempfile.TemporaryDirectory(prefix="xv12-browser-") as profile:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 [str(self.browser), "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-                 f"--user-data-dir={profile}", "--dump-dom", url],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45,
+                 "--remote-debugging-port=0", "--remote-allow-origins=*", f"--user-data-dir={profile}", "about:blank"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-        dom = result.stdout
-        title = re.search(r"<title[^>]*>(.*?)</title>", dom, re.I | re.S)
-        body_text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", dom)).strip()[:3000]
-        return {"status": "success" if result.returncode == 0 and bool(dom) else "execution_error",
-                "preview_id": preview["id"], "http_url": url, "browser": "Chromium",
-                "title": html.unescape(title.group(1).strip()) if title else "", "body_text": html.unescape(body_text),
-                "dom_bytes": len(dom.encode()), "rendered": result.returncode == 0 and bool(dom)}
+            try:
+                port_file = Path(profile) / "DevToolsActivePort"
+                port = None
+                for _ in range(100):
+                    if port_file.is_file():
+                        try:
+                            lines = port_file.read_text(encoding="utf-8").splitlines()
+                            if lines and lines[0].isdigit():
+                                port = int(lines[0])
+                                break
+                        except OSError:
+                            pass
+                    if process.poll() is not None:
+                        raise RuntimeError("Chromium stopped before DevTools became available.")
+                    time.sleep(0.05)
+                if port is None:
+                    raise RuntimeError("Chromium DevTools port did not become available.")
+                targets = []
+                for _ in range(40):
+                    try:
+                        targets = json.loads(urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2).read())
+                        if any(item.get("type") == "page" for item in targets):
+                            break
+                    except Exception:
+                        time.sleep(0.05)
+                page = next(item for item in targets if item.get("type") == "page")
+                evidence = self._collect_devtools(str(page["webSocketDebuggerUrl"]), url, str(arguments.get("click_selector") or ""))
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+        document = evidence["document"]
+        dom = str(document.get("dom") or "")
+        return {"status": "success" if bool(dom) else "execution_error",
+                "preview_id": preview["id"], "http_url": url, "browser": "Chromium DevTools",
+                "title": str(document.get("title") or ""), "body_text": str(document.get("body") or ""),
+                "dom_bytes": len(dom.encode()), "rendered": bool(dom), "console": evidence["console"],
+                "runtime_errors": evidence["runtime_errors"], "network_failures": evidence["network_failures"],
+                "console_inspected": True, "network_inspected": True, "click_performed": evidence["click_performed"],
+                "healthy": not evidence["runtime_errors"] and not evidence["network_failures"] and not any(item.get("level") == "error" for item in evidence["console"])}
 
     def screenshot(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         if not self.browser:
@@ -829,6 +955,7 @@ class CreatorPlatform:
         self.workspaces = WorkspaceService(self.store, artifacts)
         self.sandbox = SandboxService(self.store, artifacts)
         self.previews = PreviewService(self.store, artifacts)
+        self.preview_reconciliation = self.previews.reconcile()
         self.browser = BrowserService(self.store, artifacts)
         self.git = GitService(self.store, artifacts)
         self.media = MediaService(self.store, self.jobs, artifacts)

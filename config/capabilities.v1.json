@@ -239,8 +239,8 @@
     },
     {
       "id": "browser.preview.inspect", "family": "browser_validation", "family_label": "Browser Validation", "family_description": "Chromium inspection and visual proof for managed previews.",
-      "description": "Render an owned managed preview in headless Chromium and return bounded DOM, title, and visible-text evidence.", "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
-      "arguments_schema": {"type": "object", "required": ["preview_id"], "properties": {"preview_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "description": "Render an owned managed preview through Chromium DevTools and return bounded DOM, title, visible text, console exceptions, network failures, and optional click evidence.", "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["preview_id"], "properties": {"preview_id": {"type": "string"}, "click_selector": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
       "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 60, "health": "dynamic", "execution_environment": "managed-headless-chromium", "idempotency": "safe"
     },
     {
