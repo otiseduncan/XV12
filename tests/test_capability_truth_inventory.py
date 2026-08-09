@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from app.capabilities.adas_inventory import AdasSourceInventory
+from app.capabilities.adas_si import AdasSICapability
 from app.config import Settings
 from app.data_tools import adas_coverage
 from app.registry import CapabilityGateway, CapabilityRegistry, TRUTH_CONTRACT
@@ -96,6 +97,16 @@ def test_exact_source_resolution_prefers_requested_f150_ccm_document(tmp_path: P
     assert matches[0]["score"] >= 10
     assert matches[0]["descriptor"]["model"] == "F-150"
     assert matches[0]["descriptor"]["topic"].casefold() == "ccm"
+
+
+def test_adas_procedure_headings_remove_table_of_contents_dot_leaders() -> None:
+    headings = AdasSICapability._headings(
+        [(1, "6.2 Lane Change Assistance, Calibrating . . . . . . . . 282")]
+    )
+
+    assert headings == [
+        {"number": "6.2", "title": "Lane Change Assistance, Calibrating", "page": 1}
+    ]
 
 
 def test_adas_source_inventory_preserves_operator_verification_semantics(tmp_path: Path):

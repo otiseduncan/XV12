@@ -91,6 +91,7 @@ class AdasSICapability:
                 if int(match.group(1).split(".")[0]) > 50:
                     continue
                 title = re.sub(r"\s+", " ", match.group(2)).strip(" .")
+                title = re.sub(r"\s+(?:\.\s*){3,}\d+\s*$", "", title).strip(" .")
                 if "copyright" not in title.casefold():
                     headings.append({"number": match.group(1), "title": title, "page": page})
         return headings
@@ -199,7 +200,7 @@ class AdasSICapability:
                     folded = text.casefold()
                     lexical_score = sum(min(folded.count(token), 3) for token in content_tokens)
                     marker_score = self._procedure_marker_score(text)
-                    score = lexical_score + marker_score
+                    score = (lexical_score * 4) + marker_score
                     if filename_score >= 10 and marker_score > 0:
                         score += min(filename_score // 3, 8)
                     elif filename_score >= 10 and lexical_score > 0:
