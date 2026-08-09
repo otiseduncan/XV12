@@ -27,5 +27,5 @@
       "runtime_code_dependency": false
     }
   ],
-  "forbidden_runtime_projects": ["XV11", "BB1", "historical XODUZ projects"]
+  "forbidden_runtime_projects": ["all historical XODUZ codebases"]
 }
