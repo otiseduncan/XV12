@@ -1,0 +1,34 @@
+{
+  "baseline_name": "xv12-known-good-creator-builder-artifact-v1",
+  "frozen_at": "2026-08-09T18:38:00-04:00",
+  "source_proven_sha": "8140e59fd8ed22bd8cdf377f1fbea3579aa92634",
+  "source_ci": {
+    "workflow": "XV12 capability contract",
+    "run_id": 31339488340,
+    "result": "PASS",
+    "scope": "portable frozen-core and capability regressions including Builder active-job dedupe and Builder conversation-artifact handoff"
+  },
+  "frozen_core": {
+    "tag": "xv12-core-frozen-v1",
+    "sha": "1b94bbdd58afb973456f78a6a7bc412906caf13e",
+    "status": "preserved"
+  },
+  "known_good_scope": {
+    "durable_builder_execution": true,
+    "single_active_builder_job_per_conversation": true,
+    "same_turn_builder_status_dedupe": true,
+    "conversation_image_artifact_to_builder_workspace_handoff": true,
+    "builder_asset_reference_acceptance": true,
+    "live_application_preview_in_chat": true,
+    "comfyui_photorealistic_image_generation": true,
+    "job_manager": true,
+    "builder_browser_validation": true,
+    "project_download_artifact": true
+  },
+  "known_limitations": [
+    "Generative video work is not part of this freeze unless separately proven and frozen later.",
+    "This manifest records the Creator/Builder/artifact-handoff milestone and does not replace earlier frozen-core or capability-platform baselines."
+  ],
+  "contains_secrets": false,
+  "freeze_policy": "Build -> Prove -> Freeze -> Extend. New work must start from this known-good point and preserve earlier frozen contracts."
+}
