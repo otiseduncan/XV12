@@ -1,0 +1,123 @@
+﻿{
+    "baseline":  "XODUZ XV12 Baseline 1",
+    "generated_at":  "2026-08-09T06:00:38.6152761-04:00",
+    "tag":  "xv12-baseline-core-v1",
+    "model":  {
+                  "filename":  "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+                  "repository_relative_path":  "models/qwen3-coder-30b-a3b/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+                  "size_bytes":  18556689568,
+                  "sha256":  "fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad",
+                  "quantization":  "Q4_K_M",
+                  "alias":  "xoduz-qwen3-coder-30b",
+                  "context_tokens":  32768
+              },
+    "llama_cpp":  {
+                      "version":  "version: 9906 (33ca0dcb9) built with Clang 20.1.8 for Windows x86_64",
+                      "repository_relative_path":  "runtime/llama.cpp/llama-server.exe",
+                      "executable_sha256":  "5e20cae92cdf2721d37b1d5722c4f9463e11dc643f747f72912cd83971015ec8"
+                  },
+    "backend":  {
+                    "python":  "Python 3.14.0",
+                    "dependencies":  [
+                                         "annotated-types==0.8.0",
+                                         "anyio==4.14.2",
+                                         "certifi==2026.7.22",
+                                         "cffi==2.1.1",
+                                         "click==8.4.2",
+                                         "colorama==0.4.6",
+                                         "cryptography==50.0.0",
+                                         "fastapi==0.116.1",
+                                         "h11==0.16.0",
+                                         "httpcore==1.0.9",
+                                         "httptools==0.8.0",
+                                         "httpx==0.28.1",
+                                         "idna==3.18",
+                                         "iniconfig==2.3.0",
+                                         "packaging==26.3",
+                                         "pluggy==1.6.0",
+                                         "pycparser==3.0",
+                                         "pydantic==2.13.4",
+                                         "pydantic_core==2.46.4",
+                                         "Pygments==2.20.0",
+                                         "PyJWT==2.10.1",
+                                         "pytest==8.4.1",
+                                         "python-dotenv==1.2.2",
+                                         "python-multipart==0.0.20",
+                                         "PyYAML==6.0.3",
+                                         "starlette==0.47.3",
+                                         "typing-inspection==0.4.2",
+                                         "typing_extensions==4.16.0",
+                                         "uvicorn==0.35.0",
+                                         "watchfiles==1.2.0",
+                                         "websockets==17.0.1"
+                                     ]
+                },
+    "frontend":  {
+                     "implementation":  "native HTML/CSS/JavaScript",
+                     "third_party_runtime_dependencies":  [
+
+                                                          ]
+                 },
+    "database":  {
+                     "engine":  "SQLite",
+                     "schema_version":  1,
+                     "migration":  "0001_baseline_core"
+                 },
+    "capability_registry_version":  "1.0.0",
+    "configuration_sha256":  "c9ae15bf65d2971a5b00bc9596212b490116d7554b87014959c88e867de1b03b",
+    "avatar_assets":  [
+                          {
+                              "name":  "xoduz-512.png",
+                              "size_bytes":  7537,
+                              "sha256":  "3606c7a3fe757d54860ba680eedce9f9d373556fd0def4f8a598fc1812f10bce"
+                          },
+                          {
+                              "name":  "xoduz-icon.svg",
+                              "size_bytes":  660,
+                              "sha256":  "ced91ee4d59bbfd2ccc1939188c220f35b4f5410a5b01def527a3817e1f2fb59"
+                          },
+                          {
+                              "name":  "xoduz-idle.mp4",
+                              "size_bytes":  2606289,
+                              "sha256":  "de112309044741b9ea5abc3dc575e4fd6b1e1b6319408a2cdff5842425c61c67"
+                          },
+                          {
+                              "name":  "xoduz-speaking.mp4",
+                              "size_bytes":  2667803,
+                              "sha256":  "4049f4105f0f55f4f8436ad71849c3c58ff18ec8ba60fbb383264b7bd35dfe0f"
+                          }
+                      ],
+    "validation":  {
+                       "regression":  {
+                                          "result":  "PASS",
+                                          "passed":  17
+                                      },
+                       "acceptance":  {
+                                          "result":  "PASS",
+                                          "checks":  10
+                                      },
+                       "launcher":  {
+                                        "result":  "PASS",
+                                        "stopped_state_relaunch_verified":  true,
+                                        "ports":  [
+                                                      8120,
+                                                      8121
+                                                  ]
+                                    },
+                       "browser":  {
+                                       "result":  "PASS",
+                                       "desktop":  true,
+                                       "mobile":  true,
+                                       "streaming":  true,
+                                       "persistence_after_relaunch":  true,
+                                       "attachment_ui":  true,
+                                       "microphone_failure_state":  true
+                                   },
+                       "standalone_audit":  {
+                                                "result":  "PASS",
+                                                "scanned_files":  41,
+                                                "donor_runtime_references":  0,
+                                                "outside_runtime_paths":  0
+                                            }
+                   }
+}

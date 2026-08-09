@@ -1,0 +1,3 @@
+XV12-owned llama.cpp Windows CUDA runtime
+Donor build timestamp: 2026-07-08
+Exact binary hashes are recorded in config/baseline-manifest.json at freeze time.
