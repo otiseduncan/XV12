@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 from app.capabilities.adas_inventory import AdasSourceInventory
+from app.config import Settings
+from app.data_tools import adas_coverage
 from app.registry import CapabilityGateway, CapabilityRegistry, TRUTH_CONTRACT
 
 
@@ -53,6 +55,49 @@ def test_adas_source_inventory_preserves_operator_verification_semantics(tmp_pat
     assert result["verification"]["verified_by"] == "Otis"
     assert result["verification"]["pipeline_metrics_are_separate"] is True
     assert result["evidence_contract"]["do_not_infer_records_from_counts"] is True
+
+
+def test_coverage_observation_includes_authoritative_source_inventory_without_normalized_db(tmp_path: Path, monkeypatch):
+    source = tmp_path / "ADAS SI"
+    _touch(source / "2018 Audi A5 electronics.pdf")
+    _touch(source / "2018 Audi A5 communication.pdf")
+    _touch(source / "2021 Buick Envision ACC.pdf")
+    monkeypatch.setenv("XV12_ADAS_SI_SOURCE_ROOT", str(source))
+
+    settings = Settings(
+        root=tmp_path,
+        app_host="127.0.0.1",
+        app_port=8120,
+        model_port=8121,
+        model_alias="test",
+        model_context_tokens=32768,
+        model_max_tokens=100,
+        model_temperature=0.3,
+        database_path=tmp_path / "xv12.sqlite",
+        attachments_path=tmp_path / "attachments",
+        auth_mode="test",
+        google_client_id="",
+        google_client_secret="",
+        google_redirect_uri="",
+        owner_google_sub="owner",
+        cookie_secure=False,
+        adas_database_path=tmp_path / "missing-adas.sqlite",
+    )
+
+    result = adas_coverage(settings, {})
+
+    assert result["status"] == "verified"
+    assert result["normalized_database"]["available"] is False
+    source_inventory = result["authoritative_source_inventory"]
+    assert source_inventory["summary"]["document_count"] == 3
+    assert source_inventory["summary"]["vehicle_application_count"] == 2
+    assert source_inventory["summary"]["returned_vehicle_application_count"] == 2
+    assert {(item["year"], item["make"], item["model"]) for item in source_inventory["applications"]} == {
+        (2018, "Audi", "A5"),
+        (2021, "Buick", "Envision"),
+    }
+    assert "authoritative_source_inventory" in result["answering_guidance"]["all_or_unique_vehicle_requests"]
+    assert result["entity_semantics"]["counts_are_not_interchangeable"] is True
 
 
 def test_gateway_attaches_truth_contract_to_every_capability_result(tmp_path: Path):
