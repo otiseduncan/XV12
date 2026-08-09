@@ -45,6 +45,59 @@ def test_adas_source_inventory_separates_documents_from_vehicle_applications(tmp
     assert all(title.startswith("2018 Audi A5") for title in audi["source_documents"])
 
 
+def test_adas_source_inventory_canonicalizes_vehicle_identity_and_keeps_topics_as_documents(tmp_path: Path):
+    source = tmp_path / "ADAS SI"
+    for name in (
+        "2026 Ford Truck F 150 4WD CCM.pdf",
+        "2026 Ford Truck F 150 4WD SODCM.pdf",
+        "2026 Ford Truck F 150 4WD SODCMC.pdf",
+        "2022 Lexus ES 350 FWD BSM.pdf",
+        "2022 Lexus ES 350 FWD panoramic.pdf",
+        "2025 FORESTER BSM.pdf",
+        "2025 FORESTER Eyesight.pdf",
+        "2026 Kia K5 AWD (DL3) LKAS.pdf",
+        "2026 Kia K5 AWD (DL3) SCC.pdf",
+        "2018 Chevy Truck Tahoe 4WD.pdf",
+        "2018 Chevy Truck Tahoe SAS.pdf",
+    ):
+        _touch(source / name)
+
+    result = AdasSourceInventory(source).snapshot()
+    vehicles = {(item["year"], item["make"], item["model"]) for item in result["applications"]}
+
+    assert vehicles == {
+        (2018, "Chevrolet", "Tahoe"),
+        (2022, "Lexus", "ES 350"),
+        (2025, "Subaru", "Forester"),
+        (2026, "Ford", "F-150"),
+        (2026, "Kia", "K5"),
+    }
+    ford = next(item for item in result["applications"] if item["year"] == 2026 and item["make"] == "Ford")
+    assert ford["document_count"] == 3
+    assert ford["drivetrains"] == ["4WD"]
+    assert {topic.casefold() for topic in ford["topics"]} == {"ccm", "sodcm", "sodcmc"}
+    assert "CCM" not in ford["model"]
+
+
+def test_exact_source_resolution_prefers_requested_f150_ccm_document(tmp_path: Path):
+    source = tmp_path / "ADAS SI"
+    for name in (
+        "2026 Ford Truck F 150 4WD CCM.pdf",
+        "2026 Ford Truck F 150 4WD SODCM.pdf",
+        "2026 Ford Truck F 150 4WD 360.pdf",
+        "2024 Ford Truck Maverick FWD CCM.pdf",
+    ):
+        _touch(source / name)
+
+    matches = AdasSourceInventory(source).matching_documents("calibration procedure for the 2026 Ford F-150 CCM")
+
+    assert matches
+    assert matches[0]["path"].name == "2026 Ford Truck F 150 4WD CCM.pdf"
+    assert matches[0]["score"] >= 10
+    assert matches[0]["descriptor"]["model"] == "F-150"
+    assert matches[0]["descriptor"]["topic"].casefold() == "ccm"
+
+
 def test_adas_source_inventory_preserves_operator_verification_semantics(tmp_path: Path):
     source = tmp_path / "ADAS SI"
     _touch(source / "2018 Audi A5 electronics.pdf")
