@@ -75,3 +75,27 @@ def test_compatibility_stream_hides_raw_tool_syntax_and_preserves_model_choice()
     assert visible == "I'll retrieve it.\n"
     assert "<function" not in visible and calls[0]["name"] == "artifact_recent_read"
     assert calls[0]["arguments"] == '{"action": "display"}'
+
+
+def test_compatibility_stream_preserves_long_tool_name_across_small_chunks() -> None:
+    class TextFallbackModel:
+        async def stream_events(self, messages, tools=None) -> AsyncIterator[dict]:
+            raw = (
+                "Starting.\n<function=builder_session_execute>\n"
+                "<parameter=request>Build a site</parameter>\n</tool_call>"
+            )
+            for offset in range(0, len(raw), 7):
+                yield {"type": "content", "text": raw[offset:offset + 7]}
+
+    async def collect() -> list[dict]:
+        model = ToolCallCompatibilityModel(TextFallbackModel())
+        return [event async for event in model.stream_events(
+            [], tools=[{"function": {"name": "builder_session_execute"}}],
+        )]
+
+    events = asyncio.run(collect())
+    visible = "".join(str(item.get("text") or "") for item in events if item["type"] == "content")
+    calls = [item for item in events if item["type"] == "tool_call"]
+    assert visible == "Starting.\n"
+    assert calls[0]["name"] == "builder_session_execute"
+    assert calls[0]["arguments"] == '{"request": "Build a site"}'

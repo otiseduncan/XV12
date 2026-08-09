@@ -39,9 +39,9 @@
   "versions": {
     "database_schema": 3,
     "migration": "0003_voice_output_settings",
-    "capability_registry": "4.0.0",
+    "capability_registry": "4.1.0",
     "capability_permission_schema": 1,
     "artifact_schema": 3,
-    "creator_schema": 1
+    "creator_schema": 2
   }
 }

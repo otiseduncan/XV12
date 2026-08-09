@@ -288,6 +288,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "settings.voice.update",
         lambda arguments, user: {"status": "updated", "settings": store.set_voice_settings(user["id"], arguments)},
     )
+    creator_platform.configure_builder_execution(lambda: app.state.model, registry, gateway)
     creator_platform.register(gateway)
 
     @app.get("/api/health")

@@ -8,6 +8,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import subprocess
@@ -25,11 +26,14 @@ from urllib.parse import urlparse
 from urllib.request import Request as UrlRequest, urlopen
 
 import websockets
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 
 from .artifacts import ArtifactStore, active_conversation_id
 from .auth import current_user
+from .builder_execution import BuilderExecutionService
 from .comfyui import ComfyUIConfig, ComfyUIProvider
 
 
@@ -91,22 +95,44 @@ class CreatorStore:
                 CREATE INDEX IF NOT EXISTS creator_jobs_user ON creator_jobs(user_id,updated_at DESC);
                 CREATE TABLE IF NOT EXISTS creator_previews (
                     id TEXT PRIMARY KEY,user_id TEXT NOT NULL,workspace_id TEXT NOT NULL,container_ref TEXT NOT NULL,
-                    port INTEGER NOT NULL,url TEXT NOT NULL,state TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
+                    port INTEGER NOT NULL,url TEXT NOT NULL,state TEXT NOT NULL,access_token TEXT NOT NULL,
+                    created_at TEXT NOT NULL,updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS builder_execution_sessions (
+                    id TEXT PRIMARY KEY,user_id TEXT NOT NULL,conversation_id TEXT NOT NULL,project_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,parent_session_id TEXT NOT NULL,mode TEXT NOT NULL,
+                    original_request TEXT NOT NULL,status TEXT NOT NULL,stage TEXT NOT NULL,job_id TEXT NOT NULL,
+                    operation_count INTEGER NOT NULL DEFAULT 0,model_rounds INTEGER NOT NULL DEFAULT 0,
+                    repair_cycles INTEGER NOT NULL DEFAULT 0,browser_cycles INTEGER NOT NULL DEFAULT 0,
+                    elapsed_seconds REAL NOT NULL DEFAULT 0,generated_context_size INTEGER NOT NULL DEFAULT 0,
+                    latest_observation_json TEXT NOT NULL DEFAULT '[]',preview_id TEXT NOT NULL DEFAULT '',
+                    artifact_id TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS builder_sessions_conversation
+                  ON builder_execution_sessions(user_id,conversation_id,updated_at DESC);
                 CREATE TABLE IF NOT EXISTS creator_secret_refs (
                     name TEXT PRIMARY KEY,environment_name TEXT NOT NULL,contexts_json TEXT NOT NULL,
                     configured_by TEXT NOT NULL,updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS creator_meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
-                INSERT INTO creator_meta(key,value) VALUES('schema_version','1')
+                INSERT INTO creator_meta(key,value) VALUES('schema_version','2')
                   ON CONFLICT(key) DO UPDATE SET value=excluded.value;
                 """
             )
+            preview_columns = {str(row["name"]) for row in db.execute("PRAGMA table_info(creator_previews)").fetchall()}
+            if "access_token" not in preview_columns:
+                db.execute("ALTER TABLE creator_previews ADD COLUMN access_token TEXT NOT NULL DEFAULT ''")
             db.execute(
                 """UPDATE creator_jobs SET state='failed',progress=100,error_code='service_restarted',
                    message='The creator service restarted before this job finished.',completed_at=?,updated_at=?
                    WHERE state IN ('queued','running','cancelling')""",
                 (utcnow(), utcnow()),
+            )
+            db.execute(
+                """UPDATE builder_execution_sessions SET status='interrupted',
+                   stage='Interrupted by service restart; workspace preserved',updated_at=?
+                   WHERE status IN ('queued','running','cancelling')""",
+                (utcnow(),),
             )
 
     def user_root(self, user_id: str) -> Path:
@@ -204,25 +230,46 @@ class CreatorStore:
             result = json.loads(item.get("result_json") or "{}")
         except json.JSONDecodeError:
             result = {}
+        try:
+            inputs = json.loads(item.get("input_json") or "{}")
+        except json.JSONDecodeError:
+            inputs = {}
         return {
             "job_id": item.get("id"), "job_type": item.get("job_type"), "state": item.get("state"),
+            "title": str(inputs.get("request") or item.get("job_type") or "Creator job")[:120],
             "progress": int(item.get("progress") or 0), "message": item.get("message"),
             "workspace_id": item.get("workspace_id") or None, "result": result,
             "error_code": item.get("error_code") or None, "created_at": item.get("created_at"),
             "started_at": item.get("started_at"), "completed_at": item.get("completed_at"),
         }
 
-    def set_preview(self, preview_id: str, user_id: str, workspace_id: str, container: str, port: int, url: str) -> None:
+    def set_preview(
+        self, preview_id: str, user_id: str, workspace_id: str, container: str, port: int, url: str,
+        access_token: str = "",
+    ) -> str:
         now = utcnow()
+        access_token = access_token or secrets.token_urlsafe(32)
         with self.connect() as db:
             db.execute(
-                "INSERT INTO creator_previews VALUES(?,?,?,?,?,?,?,?,?)",
-                (preview_id, user_id, workspace_id, container, port, url, "running", now, now),
+                """INSERT INTO creator_previews(
+                   id,user_id,workspace_id,container_ref,port,url,state,access_token,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (preview_id, user_id, workspace_id, container, port, url, "running", access_token, now, now),
             )
+        return access_token
 
     def preview(self, preview_id: str, user_id: str) -> dict[str, Any] | None:
         with self.connect() as db:
             row = db.execute("SELECT * FROM creator_previews WHERE id=? AND user_id=?", (preview_id, user_id)).fetchone()
+        return dict(row) if row else None
+
+    def preview_by_token(self, preview_id: str, access_token: str) -> dict[str, Any] | None:
+        if len(access_token) < 32:
+            return None
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM creator_previews WHERE id=? AND access_token=?", (preview_id, access_token)
+            ).fetchone()
         return dict(row) if row else None
 
     def update_preview(self, preview_id: str, state: str) -> None:
@@ -233,6 +280,66 @@ class CreatorStore:
         with self.connect() as db:
             rows = db.execute("SELECT * FROM creator_previews WHERE state='running'").fetchall()
         return [dict(row) for row in rows]
+
+    def create_builder_session(
+        self, *, user_id: str, conversation_id: str, workspace_id: str, request: str,
+        mode: str, project_id: str = "", parent_session_id: str = "",
+    ) -> dict[str, Any]:
+        session_id, now = str(uuid.uuid4()), utcnow()
+        with self.connect() as db:
+            db.execute(
+                """INSERT INTO builder_execution_sessions(
+                   id,user_id,conversation_id,project_id,workspace_id,parent_session_id,mode,original_request,
+                   status,stage,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (session_id, user_id, conversation_id, project_id[:100], workspace_id, parent_session_id[:100],
+                 mode, request[:12000], "queued", "Queued", "", now, now),
+            )
+        return self.builder_session(session_id, user_id) or {}
+
+    def builder_session(self, session_id: str, user_id: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM builder_execution_sessions WHERE id=? AND user_id=?", (session_id, user_id)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def latest_builder_session(self, user_id: str, conversation_id: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute(
+                """SELECT * FROM builder_execution_sessions WHERE user_id=? AND conversation_id=?
+                   ORDER BY updated_at DESC LIMIT 1""",
+                (user_id, conversation_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_builder_session(self, session_id: str, **changes: Any) -> None:
+        allowed = {
+            "status", "stage", "job_id", "operation_count", "model_rounds", "repair_cycles",
+            "browser_cycles", "elapsed_seconds", "generated_context_size", "latest_observation_json",
+            "preview_id", "artifact_id",
+        }
+        updates = {key: value for key, value in changes.items() if key in allowed}
+        if not updates:
+            return
+        updates["updated_at"] = utcnow()
+        assignments = ",".join(f"{key}=?" for key in updates)
+        with self.connect() as db:
+            db.execute(f"UPDATE builder_execution_sessions SET {assignments} WHERE id=?", (*updates.values(), session_id))
+
+    @staticmethod
+    def builder_session_public(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": item.get("id"), "status": item.get("status"), "stage": item.get("stage"),
+            "workspace_id": item.get("workspace_id"), "project_id": item.get("project_id") or None,
+            "parent_session_id": item.get("parent_session_id") or None, "mode": item.get("mode"),
+            "job_id": item.get("job_id") or None, "operation_count": int(item.get("operation_count") or 0),
+            "model_rounds": int(item.get("model_rounds") or 0), "repair_cycles": int(item.get("repair_cycles") or 0),
+            "browser_cycles": int(item.get("browser_cycles") or 0),
+            "elapsed_seconds": float(item.get("elapsed_seconds") or 0),
+            "generated_context_size": int(item.get("generated_context_size") or 0),
+            "preview_id": item.get("preview_id") or None, "artifact_id": item.get("artifact_id") or None,
+            "updated_at": item.get("updated_at"),
+        }
 
     def configure_secret_ref(self, name: str, environment_name: str, contexts: list[str], admin_id: str) -> dict[str, Any]:
         now = utcnow()
@@ -296,10 +403,20 @@ class JobManager:
             try:
                 result = worker(job_id, progress, cancelled)
                 if cancelled():
-                    self.store.update_job(job_id, state="cancelled", progress=100, message="Cancelled", completed_at=utcnow())
+                    self.store.update_job(
+                        job_id, state="cancelled", progress=100, message="Cancelled; workspace preserved",
+                        result_json=json.dumps(result), completed_at=utcnow(),
+                    )
+                elif isinstance(result, dict) and result.get("status") in {"partial_success", "execution_error"}:
+                    self.store.update_job(
+                        job_id, state="failed", progress=100,
+                        message=str(result.get("message") or "Job stopped safely.")[:300],
+                        result_json=json.dumps(result), error_code=str(result.get("status")), completed_at=utcnow(),
+                    )
                 else:
                     self.store.update_job(
-                        job_id, state="succeeded", progress=100, message="Complete",
+                        job_id, state="succeeded", progress=100,
+                        message=str(result.get("message") or "Complete")[:300] if isinstance(result, dict) else "Complete",
                         result_json=json.dumps(result), completed_at=utcnow(),
                     )
             except Exception as error:
@@ -505,6 +622,13 @@ class PreviewService:
                 return port
         raise RuntimeError("No managed preview port is available.")
 
+    @staticmethod
+    def proxy_url(preview_id: str, access_token: str = "") -> str:
+        return (
+            f"/api/creator/previews/{preview_id}/token/{access_token}/"
+            if access_token else f"/api/creator/previews/{preview_id}/"
+        )
+
     def reconcile(self) -> dict[str, int]:
         checked = stopped = 0
         for preview in self.store.running_previews():
@@ -539,7 +663,7 @@ class PreviewService:
             raise RuntimeError("The isolated preview container did not start.")
         container = result.stdout.strip()
         url = f"http://127.0.0.1:{port}/"
-        self.store.set_preview(preview_id, user["id"], workspace_id, container, port, url)
+        access_token = self.store.set_preview(preview_id, user["id"], workspace_id, container, port, url)
         for _ in range(25):
             try:
                 with urlopen(url, timeout=1) as response:
@@ -549,15 +673,44 @@ class PreviewService:
                 time.sleep(0.2)
         manifest = root / ".xv12-artifacts" / f"application-{preview_id}.json"
         manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.write_text(json.dumps({"preview_url": url, "workspace_id": workspace_id}, indent=2), encoding="utf-8")
+        proxy_url = self.proxy_url(preview_id, access_token)
+        manifest.write_text(json.dumps({"preview_id": preview_id, "workspace_id": workspace_id}, indent=2), encoding="utf-8")
         artifact = self.artifacts.register_file(
             user_id=user["id"], capability_id="builder.preview.start", source_path=manifest,
             title=str(arguments.get("title") or "Application preview"), source_label="XV12 Builder Preview",
             conversation_id=str(arguments.get("conversation_id") or active_conversation_id() or "creator"),
-            artifact_type="application", actions=["open", "download"],
-            metadata={"preview_url": url, "preview_id": preview_id, "workspace_id": workspace_id, "state": "running"},
+            artifact_type="application", actions=["open"],
+            metadata={"preview_url": proxy_url, "preview_id": preview_id, "workspace_id": workspace_id,
+                      "state": "running", "healthy": False, "managed_preview": True},
         )
-        return {"status": "success", "preview": {"id": preview_id, "url": url, "state": "running", "workspace_id": workspace_id}, "artifact": artifact}
+        return {"status": "success", "preview": {"id": preview_id, "url": url, "proxy_url": proxy_url,
+                "state": "running", "workspace_id": workspace_id}, "artifact": artifact}
+
+    def finalize_artifact(
+        self, *, preview_id: str, user: dict[str, Any], conversation_id: str, title: str,
+        screenshot: dict[str, Any] | None, project_archive: dict[str, Any] | None,
+        validation: dict[str, Any],
+    ) -> dict[str, Any]:
+        preview = self.store.preview(preview_id, user["id"])
+        if not preview or preview["state"] != "running":
+            raise ValueError("A running user-owned preview is required for finalization.")
+        root = self.store.safe_path(str(preview["workspace_id"]), user["id"], ".", must_exist=True)
+        manifest = root / ".xv12-artifacts" / f"application-{preview_id}.json"
+        manifest.write_text(json.dumps({
+            "preview_id": preview_id, "workspace_id": preview["workspace_id"],
+            "healthy": bool(validation.get("healthy")), "validated_at": utcnow(),
+        }, indent=2), encoding="utf-8")
+        return self.artifacts.register_file(
+            user_id=user["id"], capability_id="builder.preview.start", source_path=manifest,
+            title=title or "Application preview", source_label="XV12 Verified Builder Preview",
+            conversation_id=conversation_id, artifact_type="application", actions=["open"],
+            metadata={
+                "preview_url": self.proxy_url(preview_id, str(preview.get("access_token") or "")), "preview_id": preview_id,
+                "workspace_id": preview["workspace_id"], "state": "running", "healthy": True,
+                "managed_preview": True, "validated_at": utcnow(), "validation": validation,
+                "screenshot": screenshot, "project_archive": project_archive,
+            },
+        )
 
     def status(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         preview = self.store.preview(str(arguments["preview_id"]), user["id"])
@@ -666,7 +819,7 @@ class BrowserService:
 
         return asyncio.run(collect())
 
-    def inspect(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    def _inspect_once(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         if not self.browser:
             return {"status": "unavailable", "message": "Chromium browser is not installed."}
         preview, url = self._authorized_url(str(arguments["preview_id"]), user["id"])
@@ -718,6 +871,23 @@ class BrowserService:
                 "runtime_errors": evidence["runtime_errors"], "network_failures": evidence["network_failures"],
                 "console_inspected": True, "network_inspected": True, "click_performed": evidence["click_performed"],
                 "healthy": not evidence["runtime_errors"] and not evidence["network_failures"] and not any(item.get("level") == "error" for item in evidence["console"])}
+
+    def inspect(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        if not self.browser:
+            return {"status": "unavailable", "message": "Chromium browser is not installed."}
+        last_error = ""
+        for attempt in range(3):
+            try:
+                result = self._inspect_once(arguments, user)
+                if result.get("status") == "success":
+                    return {**result, "inspection_attempts": attempt + 1}
+                last_error = str(result.get("message") or result.get("status") or "inspection failed")
+            except Exception as error:
+                last_error = type(error).__name__
+            if attempt < 2:
+                time.sleep(0.25 * (attempt + 1))
+        return {"status": "execution_error", "message": "Chromium inspection failed after bounded retries.",
+                "error": last_error, "inspection_attempts": 3}
 
     def screenshot(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         if not self.browser:
@@ -1017,12 +1187,28 @@ class CreatorPlatform:
         self.browser = BrowserService(self.store, artifacts)
         self.git = GitService(self.store, artifacts)
         self.media = MediaService(self.store, self.jobs, artifacts, settings)
+        self.artifacts = artifacts
+        self.builder_execution: BuilderExecutionService | None = None
+
+    def configure_builder_execution(
+        self, model_provider: Callable[[], Any], registry: Any, gateway: Any,
+    ) -> None:
+        self.builder_execution = BuilderExecutionService(
+            store=self.store, jobs=self.jobs, workspaces=self.workspaces, previews=self.previews,
+            artifacts=self.artifacts, model_provider=model_provider, registry=registry, gateway=gateway,
+        )
+
+    def execute_builder_session(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        if not self.builder_execution:
+            return {"status": "unavailable", "message": "Builder execution service is not configured."}
+        return self.builder_execution.execute(arguments, user)
 
     def register(self, gateway: Any) -> None:
         handlers = {
             "job.status": self.job_status, "job.cancel": self.job_cancel,
             "secrets.reference.configure": self.secrets.configure, "secrets.reference.status": self.secrets.status,
             "builder.workspace.create": self.workspaces.create, "builder.workspace.open": self.workspaces.open,
+            "builder.session.execute": self.execute_builder_session,
             "builder.workspace.inspect": self.workspaces.inspect, "builder.files.read": self.workspaces.read,
             "builder.files.patch": self.workspaces.patch, "builder.files.batch": self.workspaces.batch,
             "builder.project.archive": self.workspaces.archive, "builder.sandbox.exec": self.sandbox.execute,
@@ -1049,6 +1235,8 @@ class CreatorPlatform:
         return {
             "status": "available", "job_manager": "available", "sandbox": "available" if SandboxService.available() else "unavailable",
             "browser": "available" if self.browser.browser else "unavailable",
+            "builder_execution": "available" if self.builder_execution else "unavailable",
+            "builder_limits": {"soft_operations": 20, "hard_operations": 32, "repair_cycles": 6, "browser_cycles": 6},
             "image_provider": "comfyui-photorealistic" if image["healthy"] else "unavailable",
             "image_provider_status": image, "design_provider": "xoduz-local-design",
             "realistic_fallback_to_design": False,
@@ -1073,5 +1261,51 @@ def create_creator_router(platform: CreatorPlatform) -> APIRouter:
         if not item:
             raise HTTPException(status_code=404, detail="Job not found")
         return CreatorStore.job_public(item)
+
+    @router.get("/builder-sessions/{session_id}")
+    def builder_session_status(session_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        item = platform.store.builder_session(session_id, user["id"])
+        if not item:
+            raise HTTPException(status_code=404, detail="Builder session not found")
+        return CreatorStore.builder_session_public(item)
+
+    def render_preview(preview: dict[str, Any] | None, resource_path: str, request: Request) -> Response:
+        if not preview or preview["state"] != "running":
+            raise HTTPException(status_code=404, detail="Preview not found")
+        if "\\" in resource_path or any(part in {"..", "."} for part in resource_path.split("/") if part):
+            raise HTTPException(status_code=400, detail="Invalid preview path")
+        upstream = f"http://127.0.0.1:{int(preview['port'])}/{resource_path.lstrip('/')}"
+        if request.url.query:
+            upstream += f"?{request.url.query}"
+        try:
+            with httpx.Client(timeout=15, follow_redirects=False) as client:
+                response = client.get(upstream)
+            parsed = urlparse(str(response.url))
+            if parsed.hostname != "127.0.0.1" or parsed.port != int(preview["port"]):
+                raise HTTPException(status_code=502, detail="Managed preview redirect was rejected")
+            if 300 <= response.status_code < 400:
+                raise HTTPException(status_code=502, detail="Managed preview redirects are not allowed")
+        except httpx.HTTPError as error:
+            raise HTTPException(status_code=502, detail="Managed preview is unavailable") from error
+        headers = {
+            "Content-Type": response.headers.get("content-type", "application/octet-stream"),
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": "default-src 'self' data: blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'",
+            "X-Frame-Options": "SAMEORIGIN",
+            "X-Content-Type-Options": "nosniff",
+        }
+        return Response(content=response.content, status_code=response.status_code, headers=headers)
+
+    @router.get("/previews/{preview_id}/token/{access_token}/{resource_path:path}")
+    def preview_token_proxy(preview_id: str, access_token: str, resource_path: str, request: Request) -> Response:
+        preview = platform.store.preview_by_token(preview_id, access_token)
+        return render_preview(preview, resource_path, request)
+
+    @router.get("/previews/{preview_id}/{resource_path:path}")
+    def preview_proxy(
+        preview_id: str, resource_path: str, request: Request,
+        user: dict[str, Any] = Depends(current_user),
+    ) -> Response:
+        return render_preview(platform.store.preview(preview_id, user["id"]), resource_path, request)
 
     return router

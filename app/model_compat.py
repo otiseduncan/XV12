@@ -16,6 +16,7 @@ PARAMETER_BLOCK = re.compile(
     r"<parameter=([A-Za-z0-9_]+)>\s*(.*?)\s*</parameter>",
     re.IGNORECASE | re.DOTALL,
 )
+TEXT_TOOL_PREFIX_WINDOW = 256
 
 
 def artifact_followup_arguments(message: str, allowed_names: set[str]) -> dict[str, Any] | None:
@@ -136,9 +137,9 @@ class ToolCallCompatibilityModel:
                     yield {"type": "content", "text": prefix}
                 pending = pending[match.start():]
                 capturing = True
-            elif len(pending) > 32:
-                yield {"type": "content", "text": pending[:-32]}
-                pending = pending[-32:]
+            elif len(pending) > TEXT_TOOL_PREFIX_WINDOW:
+                yield {"type": "content", "text": pending[:-TEXT_TOOL_PREFIX_WINDOW]}
+                pending = pending[-TEXT_TOOL_PREFIX_WINDOW:]
         if capturing:
             calls = parse_text_tool_calls(pending, allowed_names)
             if calls:
