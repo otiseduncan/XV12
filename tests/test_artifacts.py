@@ -214,11 +214,12 @@ def test_generic_chat_renderer_covers_documents_images_tables_receipts_and_hides
     css = (ROOT / "app" / "static" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
     runtime = json.loads((ROOT / "config" / "runtime.json").read_text(encoding="utf-8"))
-    assert runtime["versions"]["artifact_schema"] == 2
-    assert "/static/app.js?v=3.2.0" in html and "/static/styles.css?v=3.2.0" in html
+    assert runtime["versions"]["artifact_schema"] == 3
+    assert "/static/app.js?v=4.0.0" in html and "/static/styles.css?v=4.0.0" in html
     assert "function appendArtifact(container, artifact)" in js
     for token in ('artifact.type === "image"', 'artifact.mime_type === "application/pdf"', 'artifact.type === "structured_data"', 'artifact.type === "receipt"'):
         assert token in js
+    assert 'artifact.type === "video"' in js and 'artifact.type === "application"' in js
     for action in ("View", "Download Section", "Print Section", "Copy text", "Full Document"):
         assert f'"{action}"' in js
     assert 'composerStatus.textContent = "Checking authorized sources…"' in js

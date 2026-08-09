@@ -261,7 +261,7 @@ function renderConversation() {
 }
 
 function artifactUrl(artifact, download = false) {
-  const base = artifact.reference || artifact.preview?.url || ""; if (!base) return "";
+  const base = (!download && artifact.type === "application" && artifact.metadata?.preview_url) || artifact.reference || artifact.preview?.url || ""; if (!base) return "";
   const page = artifact.preview?.page || artifact.metadata?.page; const query = download ? `${base}${base.includes("?") ? "&" : "?"}download=true` : base;
   return page && !download ? `${query}#page=${page}` : query;
 }
@@ -301,6 +301,10 @@ function appendArtifact(container, artifact) {
   const preview = article.querySelector(".artifact-preview"), url = artifactUrl(artifact);
   if (artifact.type === "image" && url) {
     const image = document.createElement("img"); image.src = url; image.alt = artifact.title || "Generated image"; image.loading = "lazy"; preview.append(image);
+  } else if (artifact.type === "video" && url) {
+    const video = document.createElement("video"); video.src = url; video.controls = true; video.preload = "metadata"; video.playsInline = true; preview.append(video);
+  } else if (artifact.type === "application" && artifact.metadata?.preview_url) {
+    const frame = document.createElement("iframe"); frame.src = artifact.metadata.preview_url; frame.title = `${artifact.title || "Application"} preview`; frame.loading = "lazy"; frame.setAttribute("sandbox", "allow-forms allow-modals allow-scripts allow-same-origin"); preview.append(frame);
   } else if (artifact.mime_type === "application/pdf" && url) {
     const frame = document.createElement("iframe"); frame.src = url; frame.title = `${artifact.title || "Document"} preview`; frame.loading = "lazy"; preview.append(frame);
   } else if (artifact.type === "document" && url) {
@@ -324,8 +328,9 @@ function appendArtifact(container, artifact) {
 }
 
 function appendCard(container, card) {
-  const result = card.result || {}, artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+  const result = card.result || {}, artifacts = Array.isArray(result.artifacts) ? result.artifacts : [result.artifact, result.job?.result?.artifact].filter(Boolean);
   artifacts.forEach((artifact) => appendArtifact(container, artifact));
+  if (result.job?.job_id) appendJobCard(container, result.job);
   const searchResults = result.results || result.items || [], links = Array.isArray(searchResults) ? searchResults.filter((item) => item?.url).slice(0, 5) : [];
   if (links.length) {
     const article = document.createElement("article"); article.className = "source-card"; article.innerHTML = `<header><strong>Sources</strong></header><div class="card-detail"></div>`; const detail = article.querySelector(".card-detail");
@@ -336,6 +341,22 @@ function appendCard(container, card) {
   } else if (!artifacts.length && (result.message || result.project?.name)) {
     const note = document.createElement("div"); note.className = "result-note"; note.textContent = result.message || `Project: ${result.project.name}`; container.append(note);
   }
+}
+
+function appendJobCard(container, job) {
+  const article = document.createElement("article"); article.className = "job-card"; article.dataset.jobId = job.job_id;
+  article.innerHTML = `<header><div class="artifact-mark">◷</div><div class="artifact-heading"><strong></strong><span></span></div></header><div class="job-progress"><progress max="100"></progress><span></span></div><div class="artifact-actions"></div>`;
+  const title = article.querySelector("strong"), detail = article.querySelector(".artifact-heading span"), progress = article.querySelector("progress"), note = article.querySelector(".job-progress span"), actions = article.querySelector(".artifact-actions");
+  title.textContent = String(job.job_type || "Creator job").replaceAll(".", " ");
+  const paint = (current) => { detail.textContent = current.state || "queued"; progress.value = current.progress || 0; note.textContent = `${current.progress || 0}% · ${current.message || current.state || "Queued"}`; };
+  paint(job);
+  if (!["succeeded", "failed", "cancelled"].includes(job.state)) {
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Cancel";
+    cancel.addEventListener("click", async () => { const current = await api(`/api/creator/jobs/${encodeURIComponent(job.job_id)}/cancel`, { method: "POST" }); paint(current); cancel.disabled = true; }); actions.append(cancel);
+    const poll = async () => { try { const current = await api(`/api/creator/jobs/${encodeURIComponent(job.job_id)}`); paint(current); if (["succeeded", "failed", "cancelled"].includes(current.state)) { cancel.remove(); if (current.result?.artifact) appendArtifact(container, current.result.artifact); return; } setTimeout(poll, 1200); } catch { detail.textContent = "status unavailable"; } };
+    setTimeout(poll, 900);
+  }
+  container.append(article);
 }
 
 function appendMessage(role, content = "", status = "complete", metadata = {}) {
