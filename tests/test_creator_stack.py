@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -148,6 +149,42 @@ def test_job_restart_reconciliation_is_persisted(tmp_path: Path):
     CreatorStore(tmp_path / "creator.sqlite", tmp_path / "workspaces").initialize()
     recovered = store.job(queued["id"], "user")
     assert recovered and recovered["state"] == "failed" and recovered["error_code"] == "service_restarted"
+
+
+def test_git_status_diff_commit_push_and_fast_forward_pull(app, client, tmp_path: Path):
+    login(client, "admin")
+    conversation = create_conversation(client)
+    workspace = call(client, "builder.workspace.create", name="Git acceptance")["workspace"]
+    root = app.state.creator_platform.store.safe_path(workspace["id"], client.cookies.get("unused", "") or next(
+        row["id"] for row in app.state.permission_store.list_users() if row["role"] == "admin"
+    ), ".")
+    subprocess.run(["git", "init", "-b", "main", str(root)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "XV12 Acceptance"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "xv12@example.invalid"], check=True)
+    call(client, "builder.files.patch", workspace_id=workspace["id"], path="README.md", content="# Git acceptance\n")
+    assert call(client, "git.status", workspace_id=workspace["id"])["clean"] is False
+    initialized = call(client, "git.commit", workspace_id=workspace["id"], message="Initialize acceptance project", conversation_id=conversation["id"])
+    assert initialized["exit_code"] == 0 and initialized["artifact"]["type"] == "git_receipt"
+    call(client, "builder.files.patch", workspace_id=workspace["id"], path="README.md", content="# Git acceptance\n\nTracked change.\n")
+    assert "README.md" in call(client, "git.diff", workspace_id=workspace["id"])["diff"]
+    committed = call(client, "git.commit", workspace_id=workspace["id"], message="Update acceptance project", conversation_id=conversation["id"])
+    assert committed["exit_code"] == 0 and committed["artifact"]["type"] == "git_receipt"
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "remote", "add", "origin", str(remote)], check=True)
+    pushed = call(client, "git.push", workspace_id=workspace["id"], conversation_id=conversation["id"])
+    assert pushed["exit_code"] == 0
+    subprocess.run(["git", "-C", str(remote), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+    clone = tmp_path / "other"
+    subprocess.run(["git", "clone", str(remote), str(clone)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(clone), "config", "user.name", "XV12 Acceptance"], check=True)
+    subprocess.run(["git", "-C", str(clone), "config", "user.email", "xv12@example.invalid"], check=True)
+    (clone / "upstream.txt").write_text("fast forward\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(clone), "add", "upstream.txt"], check=True)
+    subprocess.run(["git", "-C", str(clone), "commit", "-m", "Add upstream proof"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(clone), "push", "origin", "main"], check=True, capture_output=True)
+    pulled = call(client, "git.pull", workspace_id=workspace["id"], conversation_id=conversation["id"])
+    assert pulled["exit_code"] == 0 and (root / "upstream.txt").read_text() == "fast forward\n"
 
 
 def test_chat_builds_and_then_edits_the_same_application_workspace(app, client):

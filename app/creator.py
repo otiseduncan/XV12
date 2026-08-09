@@ -671,7 +671,16 @@ class GitService:
 
     def push(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         workspace_id = str(arguments["workspace_id"])
-        result = self._run(workspace_id, user["id"], ["push"], timeout=300)
+        upstream = self._run(workspace_id, user["id"], ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+        if upstream.returncode == 0:
+            result = self._run(workspace_id, user["id"], ["push"], timeout=300)
+        else:
+            branch = self._run(workspace_id, user["id"], ["branch", "--show-current"])
+            remotes = self._run(workspace_id, user["id"], ["remote"])
+            if branch.returncode != 0 or not branch.stdout.strip() or "origin" not in remotes.stdout.split():
+                result = self._run(workspace_id, user["id"], ["push"], timeout=300)
+            else:
+                result = self._run(workspace_id, user["id"], ["push", "--set-upstream", "origin", branch.stdout.strip()], timeout=300)
         return self._receipt("git.push", workspace_id, user, arguments, result, "push")
 
 
