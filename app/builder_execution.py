@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from .model_compat import ToolCallCompatibilityModel
@@ -35,6 +37,8 @@ BROWSER_CYCLE_LIMIT = 6
 WALL_TIME_LIMIT_SECONDS = 1200
 CONTEXT_CHARACTER_LIMIT = 120_000
 BUILDER_MODEL_MAX_TOKENS = 4096
+TURN_JOB_REUSE_SECONDS = 90
+ASSET_SOURCE_SUFFIXES = {".html", ".htm", ".css", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".json", ".py"}
 
 
 @dataclass(slots=True)
@@ -57,6 +61,8 @@ class BuilderEvidence:
     browser_title: str = ""
     browser_body_text: str = ""
     requirements_review_cycles: int = 0
+    staged_assets: list[dict[str, Any]] = field(default_factory=list)
+    asset_usage: list[dict[str, Any]] = field(default_factory=list)
 
     def missing(self) -> list[str]:
         missing: list[str] = []
@@ -94,15 +100,108 @@ class BuilderExecutionService:
         self.model_provider = model_provider
         self.registry = registry
         self.gateway = gateway
+        self._turn_jobs: dict[tuple[str, str, str], tuple[str, float]] = {}
+
+    def _reuse_job_response(self, job: dict[str, Any], session: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "status": "success",
+            "queued": str(job.get("state") or "") not in {"succeeded", "failed", "cancelled"},
+            "reused_existing_job": True,
+            "message": (
+                "This conversation turn already has a Builder job. No second Builder job was created; "
+                "the existing chat progress/result card is authoritative."
+            ),
+            "do_not_poll_in_this_turn": True,
+            "active_job": self.store.job_public(job),
+            "builder_session": self.store.builder_session_public(session),
+            "workspace_id": str(session.get("workspace_id") or ""),
+        }
+
+    def _stage_conversation_assets(
+        self, user_id: str, conversation_id: str, workspace_id: str,
+    ) -> list[dict[str, Any]]:
+        """Copy recent owned conversation images into the Builder workspace, most-recent first."""
+        root = self.store.safe_path(workspace_id, user_id, ".", must_exist=True)
+        target_root = root / "assets" / "xv12"
+        staged: list[dict[str, Any]] = []
+        try:
+            records = self.artifacts.recent_records(user_id, conversation_id, limit=10)
+        except Exception:
+            return staged
+        for record in records:
+            if str(record.get("artifact_type") or "") != "image":
+                continue
+            if not str(record.get("mime_type") or "").startswith("image/"):
+                continue
+            try:
+                source = self.artifacts.materialize(record)
+            except Exception:
+                continue
+            suffix = source.suffix.casefold() or ".img"
+            artifact_id = str(record.get("id") or "")
+            relative = Path("assets") / "xv12" / f"artifact-{artifact_id[:12]}{suffix}"
+            target = root / relative
+            target_root.mkdir(parents=True, exist_ok=True)
+            try:
+                if not target.is_file() or target.stat().st_size != source.stat().st_size:
+                    shutil.copy2(source, target)
+            except OSError:
+                continue
+            staged.append({
+                "artifact_id": artifact_id,
+                "title": str(record.get("title") or source.name)[:240],
+                "mime_type": str(record.get("mime_type") or ""),
+                "path": relative.as_posix(),
+                "most_recent": len(staged) == 0,
+            })
+            if len(staged) >= 4:
+                break
+        return staged
+
+    def _scan_asset_usage(self, workspace_id: str, user_id: str, assets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return evidence that staged assets are referenced by actual application source, not merely copied."""
+        if not assets:
+            return []
+        root = self.store.safe_path(workspace_id, user_id, ".", must_exist=True)
+        candidates: list[tuple[str, str]] = []
+        ignored = {".git", "node_modules", ".creator-deps", ".xv12-artifacts", "__pycache__", ".pytest_cache"}
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix.casefold() not in ASSET_SOURCE_SUFFIXES:
+                continue
+            relative = path.relative_to(root)
+            if any(part in ignored for part in relative.parts):
+                continue
+            lowered_parts = {part.casefold() for part in relative.parts}
+            if "tests" in lowered_parts or relative.name.casefold().startswith("test_") or ".test." in relative.name.casefold():
+                continue
+            try:
+                if path.stat().st_size > 750_000:
+                    continue
+                candidates.append((relative.as_posix(), path.read_text(encoding="utf-8", errors="replace")))
+            except OSError:
+                continue
+        usage: list[dict[str, Any]] = []
+        for asset in assets:
+            asset_path = str(asset.get("path") or "")
+            basename = Path(asset_path).name
+            references = [name for name, text in candidates if asset_path in text or basename in text]
+            usage.append({
+                "artifact_id": asset.get("artifact_id"),
+                "title": asset.get("title"),
+                "path": asset_path,
+                "referenced_by": references[:20],
+                "referenced": bool(references),
+            })
+        return usage
 
     def execute(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         request = str(arguments.get("request") or "").strip()
         if not request:
             return {"status": "invalid_arguments", "message": "A Builder request is required."}
         conversation_id = str(arguments.get("conversation_id") or "").strip()
-        if not conversation_id:
-            from .artifacts import active_conversation_id
+        from .artifacts import active_conversation_id, active_user_message
 
+        if not conversation_id:
             conversation_id = str(active_conversation_id() or "")
         if not conversation_id:
             return {"status": "invalid_arguments", "message": "Builder execution requires an active conversation."}
@@ -113,27 +212,30 @@ class BuilderExecutionService:
         parent = self.store.latest_builder_session(user["id"], conversation_id)
         workspace_id = str(arguments.get("workspace_id") or "")
         force_new_workspace = bool(arguments.get("new_workspace"))
+        turn_message = str(active_user_message() or "").strip()
+        turn_key = (str(user["id"]), conversation_id, turn_message) if turn_message else None
+
+        # Calls made by the model in the same user turn share active_user_message. Reuse that turn's
+        # first Builder job even if it completed before a later model-generated "status" call arrives.
+        if turn_key and not force_new_workspace:
+            now = time.monotonic()
+            for key, (_, created) in list(self._turn_jobs.items()):
+                if now - created > TURN_JOB_REUSE_SECONDS:
+                    self._turn_jobs.pop(key, None)
+            cached = self._turn_jobs.get(turn_key)
+            if cached:
+                cached_job = self.store.job(cached[0], user["id"])
+                cached_session = self.store.latest_builder_session(user["id"], conversation_id)
+                if cached_job and cached_session and str(cached_session.get("job_id") or "") == str(cached_job.get("id") or ""):
+                    return self._reuse_job_response(cached_job, cached_session)
 
         # A Builder job owns the engineering lifecycle for one conversation. The chat card polls
-        # that durable job directly; a model attempt to "check status" by invoking this high-level
-        # capability again must never create a competing session or a second progress card.
+        # that durable job directly; a model attempt to check status must not create a competitor.
         if parent and not force_new_workspace:
             active_job_id = str(parent.get("job_id") or "")
             active_job = self.store.job(active_job_id, user["id"]) if active_job_id else None
             if active_job and str(active_job.get("state") or "") in {"queued", "running", "cancelling"}:
-                return {
-                    "status": "success",
-                    "queued": True,
-                    "reused_existing_job": True,
-                    "message": (
-                        "A Builder session is already active in this conversation. No second Builder job was created; "
-                        "the existing chat progress card will continue updating automatically."
-                    ),
-                    "do_not_poll_in_this_turn": True,
-                    "active_job": self.store.job_public(active_job),
-                    "builder_session": self.store.builder_session_public(parent),
-                    "workspace_id": str(parent.get("workspace_id") or ""),
-                }
+                return self._reuse_job_response(active_job, parent)
 
         if workspace_id:
             if not self.store.workspace(workspace_id, user["id"]):
@@ -152,6 +254,7 @@ class BuilderExecutionService:
             title = str(arguments.get("title") or "").strip() or " ".join(request.split()[:8])
             workspace_id = str(self.store.create_workspace(user["id"], title).get("id") or "")
 
+        staged_assets = self._stage_conversation_assets(user["id"], conversation_id, workspace_id)
         session = self.store.create_builder_session(
             user_id=user["id"],
             conversation_id=conversation_id,
@@ -170,7 +273,7 @@ class BuilderExecutionService:
         ) -> dict[str, Any]:
             self.store.update_builder_session(session_id, status="running", stage="Planning application", job_id=job_id)
             try:
-                return asyncio.run(self._run(session_id, user, progress, cancelled, parent))
+                return asyncio.run(self._run(session_id, user, progress, cancelled, parent, staged_assets))
             except Exception as error:
                 self.store.update_builder_session(
                     session_id,
@@ -194,10 +297,12 @@ class BuilderExecutionService:
             conversation_id,
             "builder.session.execute",
             workspace_id,
-            {"builder_session_id": session_id, "request": request, "mode": mode},
+            {"builder_session_id": session_id, "request": request, "mode": mode, "staged_assets": staged_assets},
             worker,
         )
         self.store.update_builder_session(session_id, job_id=str(job["job_id"]))
+        if turn_key:
+            self._turn_jobs[turn_key] = (str(job["job_id"]), time.monotonic())
         return {
             "status": "success",
             "queued": True,
@@ -208,6 +313,7 @@ class BuilderExecutionService:
                 self.store.builder_session(session_id, user["id"]) or session
             ),
             "workspace_id": workspace_id,
+            "staged_assets": staged_assets,
         }
 
     def _tools(self, user: dict[str, Any]) -> list[dict[str, Any]]:
@@ -240,16 +346,32 @@ class BuilderExecutionService:
         return ToolCallCompatibilityModel(type(base)(builder_settings))
 
     @staticmethod
-    def _system_prompt(session: dict[str, Any], existing_preview_id: str = "") -> str:
+    def _system_prompt(
+        session: dict[str, Any], existing_preview_id: str = "", staged_assets: list[dict[str, Any]] | None = None,
+    ) -> str:
         preview_note = (
             f"A managed preview already exists with ID {existing_preview_id}; reuse and revalidate it unless it is unhealthy."
             if existing_preview_id
             else "No preview exists yet; start exactly one after the application is ready."
         )
+        assets = staged_assets or []
+        if assets:
+            lines = "; ".join(
+                f"{item['title']} -> {item['path']}{' (most recent)' if item.get('most_recent') else ''}"
+                for item in assets
+            )
+            asset_note = (
+                "Conversation image artifacts have already been copied into this workspace, most-recent first: "
+                + lines
+                + ". When the user refers to this/the supplied/the generated/the previous image or asks to use an image from the conversation, use the matching staged workspace asset rather than inventing a replacement or an external URL. "
+                "If an asset is requested, the final application source must actually reference its workspace-relative path; merely having the file present does not satisfy the request. "
+            )
+        else:
+            asset_note = "No conversation image artifacts were staged for this Builder request. "
         return (
             "You are the model-directed XV12 Builder engineer operating inside a durable, bounded execution session. "
             "Use only the supplied Builder tools. Do not call unrelated capabilities. Do not create another workspace. "
-            f"The exact owned workspace ID is {session['workspace_id']}. {preview_note} "
+            f"The exact owned workspace ID is {session['workspace_id']}. {preview_note} {asset_note}"
             "Implement the user's request as a polished, responsive, interactive application. You choose the architecture, files, dependencies, and repair strategy. "
             "For a small website, prefer a dependency-free implementation when that satisfies the request. "
             "The default sandbox is Python 3.12 Alpine; for dependency-free sites, create a portable standard-library unittest and run it with python -m unittest rather than assuming pytest or Node packages are installed. "
@@ -290,8 +412,11 @@ class BuilderExecutionService:
         compact = messages[:2] + messages[-14:]
         return compact, len(json.dumps(compact, ensure_ascii=False, default=str))
 
-    def _initial_evidence(self, workspace_id: str, user: dict[str, Any], parent: dict[str, Any] | None) -> BuilderEvidence:
-        evidence = BuilderEvidence(workspace_id=workspace_id)
+    def _initial_evidence(
+        self, workspace_id: str, user: dict[str, Any], parent: dict[str, Any] | None,
+        staged_assets: list[dict[str, Any]] | None = None,
+    ) -> BuilderEvidence:
+        evidence = BuilderEvidence(workspace_id=workspace_id, staged_assets=list(staged_assets or []))
         if not parent or str(parent.get("workspace_id")) != workspace_id:
             return evidence
         evidence.preview_id = str(parent.get("preview_id") or "")
@@ -406,20 +531,26 @@ class BuilderExecutionService:
         if not hasattr(model, "complete"):
             return True, []
         record = json.dumps(messages[-10:], ensure_ascii=False, default=str)[:16_000]
+        asset_evidence = json.dumps(
+            {"staged_assets": evidence.staged_assets, "asset_usage": evidence.asset_usage},
+            ensure_ascii=False, default=str,
+        )[:12_000]
         prompt = (
             "Original application request:\n" + str(session["original_request"])[:6000]
             + "\n\nFinal Chromium title:\n" + evidence.browser_title
             + "\n\nFinal visible text:\n" + evidence.browser_body_text
+            + "\n\nConversation asset evidence:\n" + asset_evidence
             + "\n\nRecent bounded engineering record:\n" + record
         )
         raw = await model.complete([
             {
                 "role": "system",
                 "content": (
-                    "You are the XV12 Builder acceptance reviewer. Compare the original request with the final rendered UI and engineering record. "
+                    "You are the XV12 Builder acceptance reviewer. Compare the original request with the final rendered UI, conversation asset evidence, and engineering record. "
                     "Return strict JSON only: {\"satisfied\":true|false,\"missing\":[\"short concrete requirement\"]}. "
-                    "Mark false when any explicit requested section, behavior, visual change, or content is absent. "
+                    "Mark false when any explicit requested section, behavior, visual change, content, or requested conversation asset use is absent. "
                     "A requested visible section or content must be present in the final Chromium-visible text; unused CSS selectors, comments, planned classes, or tool arguments do not count. "
+                    "If the user asks to use this/the supplied/the generated/the previous image or another conversation asset, the matching staged asset must show referenced=true with at least one real application source file in referenced_by. Merely staging or copying the asset does not count as use. "
                     "Use engineering records only to verify non-textual implementation details such as an explicitly requested color. Do not require anything the user did not request."
                 ),
             },
@@ -453,6 +584,8 @@ class BuilderExecutionService:
             "builder_session": self.store.builder_session_public(
                 self.store.builder_session(str(session["id"]), user["id"]) or session
             ),
+            "staged_assets": evidence.staged_assets,
+            "asset_usage": evidence.asset_usage,
         }
         if evidence.application_artifact:
             result["artifact"] = evidence.application_artifact
@@ -465,14 +598,15 @@ class BuilderExecutionService:
         progress: Callable[[int, str], None],
         cancelled: Callable[[], bool],
         parent: dict[str, Any] | None,
+        staged_assets: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         session = self.store.builder_session(session_id, user["id"])
         if not session:
             raise RuntimeError("Builder session disappeared before execution.")
         started = time.monotonic()
-        evidence = self._initial_evidence(str(session["workspace_id"]), user, parent)
+        evidence = self._initial_evidence(str(session["workspace_id"]), user, parent, staged_assets)
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self._system_prompt(session, evidence.preview_id)},
+            {"role": "system", "content": self._system_prompt(session, evidence.preview_id, evidence.staged_assets)},
             {"role": "user", "content": str(session["original_request"])},
         ]
         tools = self._tools(user)
@@ -548,6 +682,7 @@ class BuilderExecutionService:
                         f"browser_healthy={evidence.browser_healthy}. "
                         + ("Complete these remaining gates next: " + "; ".join(missing) + ". " if missing else "All required gates are satisfied. ")
                         + "Keep the original request in scope: " + str(session["original_request"])[:3000] + ". "
+                        + "If the request depends on a staged conversation asset, ensure the actual application source references its listed workspace-relative path. "
                         + "Do not repeat a healthy gate unless a later file change invalidates its evidence."
                     ),
                 })
@@ -567,6 +702,7 @@ class BuilderExecutionService:
                 self.store.update_builder_session(session_id, generated_context_size=context_size)
                 continue
 
+            evidence.asset_usage = self._scan_asset_usage(evidence.workspace_id, user["id"], evidence.staged_assets)
             evidence.requirements_review_cycles += 1
             satisfied, semantic_missing = await self._review_requirements(model, session, evidence, messages)
             if not satisfied:
@@ -578,9 +714,10 @@ class BuilderExecutionService:
                 messages.append({
                     "role": "user",
                     "content": (
-                        "Final acceptance review found missing requested behavior or content: "
+                        "Final acceptance review found missing requested behavior, content, or asset usage: "
                         + "; ".join(semantic_missing or ["review verdict was incomplete"])
-                        + ". Repair the application, rerun its test/build, and revalidate Chromium before finishing."
+                        + ". Repair the application, rerun its test/build, and revalidate Chromium before finishing. "
+                        + "Current staged asset usage evidence: " + json.dumps(evidence.asset_usage, ensure_ascii=False)[:5000]
                     ),
                 })
                 continue
@@ -589,6 +726,7 @@ class BuilderExecutionService:
         else:
             return self._partial_result(session, user, evidence, "Builder model-round budget reached.")
 
+        evidence.asset_usage = self._scan_asset_usage(evidence.workspace_id, user["id"], evidence.staged_assets)
         progress(88, "Capturing final preview evidence")
         if not evidence.screenshot_artifact:
             if evidence.operation_count >= HARD_OPERATION_LIMIT:
@@ -623,6 +761,7 @@ class BuilderExecutionService:
                 "requirements_reviewed": True,
                 "requirements_review_cycles": evidence.requirements_review_cycles,
                 "test_build_summary": evidence.test_build_summary[-2000:],
+                "asset_usage": evidence.asset_usage,
             },
         )
         evidence.application_artifact = application
@@ -648,7 +787,10 @@ class BuilderExecutionService:
                 "repair_cycles": evidence.repair_cycles,
                 "requirements_reviewed": True,
                 "requirements_review_cycles": evidence.requirements_review_cycles,
+                "asset_usage": evidence.asset_usage,
             },
+            "staged_assets": evidence.staged_assets,
+            "asset_usage": evidence.asset_usage,
             "operations_completed": evidence.operation_count,
             "model_rounds": evidence.model_rounds,
             "workspace_preserved": True,
