@@ -16,6 +16,13 @@ class CapabilityDenied(PermissionError):
     pass
 
 
+TRUTH_CONTRACT = (
+    "Authoritative records in the final answer must come from records actually returned by this capability. "
+    "Counts and summaries do not authorize inventing or inferring missing itemized rows. "
+    "If the user asks to list underlying records and this result does not enumerate them, use an available listing/inventory capability or state that the records were not returned."
+)
+
+
 @dataclass(slots=True)
 class AuthorizationDecision:
     allowed: bool
@@ -31,7 +38,18 @@ class CapabilityRegistry:
     def __init__(self, path: Path, permissions: Any | None = None) -> None:
         self.document = json.loads(path.read_text(encoding="utf-8"))
         failure_semantics = ["success", "partial_success", "no_result", "unavailable", "timeout", "invalid_arguments", "permission_denied", "approval_required", "cancelled", "execution_error"]
+        ids: set[str] = set()
         for item in self.document["capabilities"]:
+            capability_id = str(item.get("id") or "").strip()
+            if not capability_id:
+                raise ValueError("Every capability must declare a non-empty id.")
+            if capability_id in ids:
+                raise ValueError(f"Duplicate capability id: {capability_id}")
+            ids.add(capability_id)
+            if not item.get("family"):
+                raise ValueError(f"Capability {capability_id} must declare a family.")
+            if not isinstance(item.get("arguments_schema"), dict) or item["arguments_schema"].get("type") != "object":
+                raise ValueError(f"Capability {capability_id} must declare an object arguments_schema.")
             item.setdefault("supported_scopes", [item.get("operation_scope") or "read"])
             item.setdefault("operation_scope", item["supported_scopes"][0])
             item.setdefault("classification", item["operation_scope"])
@@ -105,7 +123,7 @@ class CapabilityRegistry:
                 "type": "function",
                 "function": {
                     "name": self.tool_name(item["id"]),
-                    "description": f"Registry family: {item['family']}. Registry health: {item['health']}. {item['description']}",
+                    "description": f"Registry family: {item['family']}. Registry health: {item['health']}. {item['description']} Evidence rule: {TRUTH_CONTRACT}",
                     "parameters": item["arguments_schema"],
                 },
             }
@@ -178,6 +196,20 @@ class CapabilityGateway:
             if isinstance(value, (int, float)) and "maximum" in spec and value > spec["maximum"]:
                 raise ValueError(f"Argument {name} exceeds its maximum.")
 
+    @staticmethod
+    def _attach_evidence_contract(result: dict[str, Any], capability_id: str) -> dict[str, Any]:
+        contract = result.get("evidence_contract")
+        if not isinstance(contract, dict):
+            contract = {}
+        result["evidence_contract"] = {
+            "capability_id": capability_id,
+            "authoritative_records_only": True,
+            "specific_records_must_be_present_in_result": True,
+            "counts_do_not_imply_missing_rows": True,
+            **contract,
+        }
+        return result
+
     async def execute(self, capability_id: str, user: dict[str, Any], arguments: dict[str, Any]) -> tuple[Any, AuthorizationDecision]:
         decision = self.registry.authorize(capability_id, user)
         if not decision.allowed:
@@ -207,10 +239,10 @@ class CapabilityGateway:
                     "invalid_request": "invalid_arguments", "failed": "execution_error",
                 }.get(domain_status, "success")
                 result = {**result, "status": mapped, "domain_status": domain_status}
-            return result, decision
+            return self._attach_evidence_contract(result, capability_id), decision
         except (TimeoutError, asyncio.TimeoutError):
-            return {"status": "timeout", "message": "Capability execution timed out."}, decision
+            return self._attach_evidence_contract({"status": "timeout", "message": "Capability execution timed out."}, capability_id), decision
         except (TypeError, ValueError) as error:
-            return {"status": "invalid_arguments", "message": str(error)[:500]}, decision
+            return self._attach_evidence_contract({"status": "invalid_arguments", "message": str(error)[:500]}, capability_id), decision
         except Exception as error:
-            return {"status": "execution_error", "error": type(error).__name__, "message": "Capability execution failed safely."}, decision
+            return self._attach_evidence_contract({"status": "execution_error", "error": type(error).__name__, "message": "Capability execution failed safely."}, capability_id), decision
