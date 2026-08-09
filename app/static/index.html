@@ -9,103 +9,75 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <div class="ambient ambient-one"></div>
-    <div class="ambient ambient-two"></div>
+    <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
 
     <main id="login-view" class="login-shell hidden" aria-live="polite">
       <section class="login-card">
-        <div class="login-mark">
-          <img src="/assets/avatar/xoduz-512.png" alt="XODUZ" />
-          <span class="presence-dot"></span>
-        </div>
-        <p class="eyebrow">XODUZ XV12 · BASELINE 1</p>
-        <h1>Meet X.</h1>
-        <p class="login-copy">Your private, local, model-first assistant. Sign in to continue your conversations.</p>
+        <div class="login-mark"><img src="/assets/avatar/xoduz-512.png" alt="XODUZ" /><span class="presence-dot"></span></div>
+        <p class="eyebrow">XODUZ · XV12</p><h1>Meet X.</h1>
+        <p class="login-copy">Your private, local, model-first assistant. Sign in to continue.</p>
         <button id="google-login" class="primary-button wide hidden">Continue with Google</button>
         <div id="test-login" class="test-login hidden">
           <p>Controlled local identity provider</p>
-          <button data-persona="admin" class="primary-button wide">Continue as owner</button>
-          <div class="test-row">
-            <button data-persona="user-a" class="secondary-button">Test user A</button>
-            <button data-persona="user-b" class="secondary-button">Test user B</button>
-          </div>
+          <button data-persona="admin" class="primary-button wide">Continue as Otis</button>
+          <div class="test-row"><button data-persona="user-a" class="secondary-button">Test user A</button><button data-persona="user-b" class="secondary-button">Test user B</button></div>
         </div>
         <p id="login-status" class="status-text"></p>
       </section>
     </main>
 
     <main id="app-view" class="app-shell hidden">
-      <aside id="sidebar" class="sidebar">
-        <div class="brand-row">
-          <div class="brand-icon">X</div>
-          <div><strong>XODUZ</strong><span>XV12</span></div>
-          <button id="close-sidebar" class="icon-button mobile-only" aria-label="Close conversations">×</button>
-        </div>
-        <button id="new-chat" class="new-chat-button"><span>＋</span> New conversation</button>
+      <aside id="sidebar" class="sidebar" aria-label="Conversation sidebar">
+        <div class="brand-row"><div class="brand-icon">X</div><div><strong>XODUZ</strong><span>XV12</span></div><button id="collapse-sidebar" class="icon-button" aria-label="Collapse sidebar">‹</button></div>
+        <button id="new-chat" class="new-chat-button"><span>＋</span><b>New conversation</b></button>
+        <label class="history-search"><span>⌕</span><input id="history-search" type="search" placeholder="Search history" aria-label="Search conversation history" /></label>
         <p class="section-label">Conversations</p>
         <nav id="conversation-list" class="conversation-list" aria-label="Conversation history"></nav>
         <div class="sidebar-footer">
-          <button id="tools-button" class="nav-button"><span>◇</span> Tools <small>Foundation</small></button>
-          <button id="settings-button" class="nav-button"><span>⚙</span> Settings</button>
-          <div class="user-card">
-            <div id="user-initial" class="user-initial">X</div>
-            <div class="user-details"><strong id="user-name"></strong><span id="user-role"></span></div>
-            <button id="logout" class="icon-button" title="Sign out" aria-label="Sign out">↪</button>
-          </div>
+          <button id="projects-button" class="nav-button"><span>▱</span><b>Projects</b><small id="project-count">0</small></button>
+          <button id="tools-button" class="nav-button"><span>◇</span><b>Tools</b><small>Live</small></button>
+          <button id="settings-button" class="nav-button"><span>⚙</span><b>Settings</b></button>
+          <div class="user-card"><div id="user-initial" class="user-initial">X</div><div class="user-details"><strong id="user-name"></strong><span id="user-role"></span></div><button id="logout" class="icon-button" title="Sign out" aria-label="Sign out">↪</button></div>
         </div>
       </aside>
 
       <section class="workspace">
         <header class="topbar">
-          <button id="open-sidebar" class="icon-button mobile-only" aria-label="Open conversations">☰</button>
-          <div class="conversation-heading">
-            <strong id="conversation-title">New conversation</strong>
-            <span id="health-label"><i></i> Checking local runtime</span>
-          </div>
+          <button id="open-sidebar" class="icon-button" aria-label="Open conversations">☰</button>
+          <div class="conversation-heading"><strong id="conversation-title">New conversation</strong><span id="health-label"><i></i> Checking runtime</span></div>
+          <button id="active-project-chip" class="project-chip hidden" title="Manage active project"></button>
+          <span id="top-user" class="top-user"></span>
+          <button id="top-logout" class="icon-button" title="Sign out" aria-label="Sign out">↪</button>
           <span class="local-badge">LOCAL · PRIVATE</span>
         </header>
 
-        <div id="welcome" class="welcome">
-          <div class="avatar-stage">
-            <div class="avatar-orbit orbit-one"></div>
-            <div class="avatar-orbit orbit-two"></div>
-            <video id="x-avatar" autoplay muted loop playsinline poster="/assets/avatar/xoduz-512.png">
-              <source src="/assets/avatar/xoduz-idle.mp4" type="video/mp4" />
-            </video>
-          </div>
-          <p class="eyebrow">YOUR PERSONAL AI</p>
-          <h2>Good to see you.</h2>
-          <p>What are we working on?</p>
-          <div class="suggestions">
-            <button>Help me think through an idea</button>
-            <button>Continue from our last conversation</button>
-            <button>Plan my next task</button>
-          </div>
-        </div>
+        <div class="assistant-shell">
+          <aside class="avatar-panel" aria-label="XODUZ presence">
+            <div class="avatar-stage"><div class="avatar-orbit orbit-one"></div><div class="avatar-orbit orbit-two"></div><video id="x-avatar" autoplay muted loop playsinline poster="/assets/avatar/xoduz-512.png"><source src="/assets/avatar/xoduz-idle.mp4" type="video/mp4" /></video></div>
+            <p class="eyebrow">YOUR PERSONAL AI</p><h2>X</h2><span id="presence-label">Ready</span>
+          </aside>
 
-        <div id="messages" class="messages" aria-live="polite"></div>
-
-        <div class="composer-wrap">
-          <div id="attachment-chips" class="attachment-chips"></div>
-          <form id="composer" class="composer">
-            <label class="icon-button composer-action" title="Attach a file">
-              <input id="file-input" type="file" hidden />
-              <span>＋</span>
-            </label>
-            <textarea id="message-input" rows="1" maxlength="20000" placeholder="Message XODUZ..." aria-label="Message XODUZ"></textarea>
-            <button id="mic-button" type="button" class="icon-button composer-action" title="Dictate" aria-label="Start dictation">⌁</button>
-            <button id="send-button" type="submit" class="send-button" aria-label="Send message">↑</button>
-          </form>
-          <p id="composer-status" class="composer-status">X can make mistakes. Verify important information.</p>
+          <section class="conversation-stage">
+            <div id="welcome" class="welcome"><p class="eyebrow">GOOD TO SEE YOU</p><h2 id="welcome-name">What are we working on?</h2><p>Talk naturally, attach context, or ask X to use a registered capability.</p><div class="suggestions"><button>What can you do right now?</button><button>Show my ADAS database coverage</button><button>Search today's major news</button></div></div>
+            <div id="messages" class="messages" aria-live="polite" aria-label="Conversation messages"></div>
+            <button id="jump-latest" class="jump-latest hidden">↓ Jump to latest</button>
+            <div class="composer-wrap">
+              <div id="attachment-chips" class="attachment-chips"></div>
+              <form id="composer" class="composer">
+                <label class="icon-button composer-action" title="Attach a file"><input id="file-input" type="file" hidden /><span>＋</span></label>
+                <textarea id="message-input" rows="1" maxlength="20000" placeholder="Message X…" aria-label="Message X"></textarea>
+                <button id="mic-button" type="button" class="icon-button composer-action" title="Dictate" aria-label="Start dictation">⌁</button>
+                <button id="send-button" type="submit" class="send-button" aria-label="Send message">↑</button>
+              </form>
+              <p id="composer-status" class="composer-status">X can make mistakes. Verify important information.</p>
+            </div>
+          </section>
         </div>
       </section>
     </main>
 
-    <dialog id="modal" class="modal">
-      <button id="close-modal" class="icon-button modal-close" aria-label="Close">×</button>
-      <div id="modal-content"></div>
-    </dialog>
-
+    <dialog id="modal" class="modal"><button id="close-modal" class="icon-button modal-close" aria-label="Close">×</button><div id="modal-content"></div></dialog>
     <script src="/static/app.js" defer></script>
   </body>
 </html>

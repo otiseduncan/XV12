@@ -19,11 +19,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .auth import create_auth_router, current_user
+from .assistant import AssistantOrchestrator
 from .config import Settings
 from .context import ContextAssembler
+from .data_tools import adas_coverage, adas_search, calibration_iq_health, calibration_iq_read, start_calibration_iq
 from .database import UserScopedStore, utcnow
 from .model import LlamaModel
 from .registry import CapabilityDenied, CapabilityGateway, CapabilityRegistry
+from .web_tools import current_search
 
 
 class ConversationCreate(BaseModel):
@@ -37,6 +40,20 @@ class ChatRequest(BaseModel):
 
 class CapabilityCall(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConversationUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    reference: str | None = Field(default=None, max_length=500)
+    description: str = Field(default="", max_length=2000)
+
+
+class PreferredNameUpdate(BaseModel):
+    preferred_name: str = Field(min_length=1, max_length=80)
 
 
 def sse(event: str, payload: dict[str, Any]) -> str:
@@ -97,7 +114,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "ok": bool(model_health.get("reachable") and model_health.get("alias_ok")),
             "application": {"name": "XODUZ XV12", "status": "healthy"},
-            "database": {"status": "healthy", "schema": "1", "path_owned": settings.root in settings.database_path.parents},
+            "database": {"status": "healthy", "schema": "2", "path_owned": settings.root in settings.database_path.parents},
             "model": {
                 **model_health,
                 "expected_alias": settings.model_alias,
@@ -107,10 +124,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
             "auth": {"mode": settings.auth_mode, "admin_count": store.admin_count()},
             "registry": {"version": registry.version, "count": len(registry.capabilities)},
+            "services": {
+                "adas": {"status": "available" if (settings.adas_database_path or settings.root / "data/knowledge/adas_knowledge.sqlite").exists() else "offline"},
+                "calibration_iq": await calibration_iq_health(settings),
+                "web": {"status": "available", "providers": ["Bing News RSS", "DuckDuckGo HTML"]},
+            },
         }
 
-    gateway.register("system.health.read", lambda _: {"status": "healthy"})
+    gateway.register("system.health.read", lambda _: health_document())
     gateway.register("admin.capabilities.inspect", lambda _: {"registry_version": registry.version, "capabilities": list(registry.capabilities)})
+    gateway.register("web.current.search", lambda arguments: current_search(arguments, settings.web_timeout_seconds))
+    gateway.register("adas.coverage.read", lambda arguments: adas_coverage(settings, arguments))
+    gateway.register("adas.knowledge.search", lambda arguments: adas_search(settings, arguments))
+    gateway.register("calibration_iq.repair_orders.read", lambda arguments: calibration_iq_read(settings, arguments))
+    gateway.register("project.list", lambda _arguments, user: {"status": "verified", "projects": store.list_projects(user["id"])})
+
+    def register_project_capability(arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        project = store.create_project(
+            user["id"],
+            str(arguments.get("name") or ""),
+            arguments.get("reference"),
+            str(arguments.get("description") or ""),
+        )
+        activated = store.activate_project(user["id"], project["id"])
+        return {"status": "registered_and_activated", "project": activated}
+
+    gateway.register(
+        "project.register",
+        register_project_capability,
+    )
+    gateway.register(
+        "project.activate",
+        lambda arguments, user: {
+            "status": "activated" if (project := store.activate_project(user["id"], str(arguments.get("project_id") or ""))) else "not_found",
+            "project": project,
+        },
+    )
+    gateway.register("project.detach", lambda _arguments, user: {"status": "detached", "changed": store.deactivate_project(user["id"])})
+    gateway.register("service.calibration_iq.start", lambda arguments: start_calibration_iq(settings, arguments))
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
@@ -150,6 +201,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Conversation not found")
         return item
 
+    @app.patch("/api/conversations/{conversation_id}")
+    def rename_conversation(conversation_id: str, payload: ConversationUpdate, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        item = store.rename_conversation(user["id"], conversation_id, payload.title)
+        if not item:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return item
+
+    @app.delete("/api/conversations/{conversation_id}", status_code=204)
+    def delete_conversation(conversation_id: str, user: dict[str, Any] = Depends(current_user)) -> Response:
+        if not store.delete_conversation(user["id"], conversation_id):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return Response(status_code=204)
+
+    @app.get("/api/projects")
+    def list_projects(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+        return store.list_projects(user["id"])
+
+    @app.post("/api/projects", status_code=201)
+    def create_project(payload: ProjectCreate, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        return store.create_project(user["id"], payload.name, payload.reference, payload.description)
+
+    @app.post("/api/projects/{project_id}/activate")
+    def activate_project(project_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        project = store.activate_project(user["id"], project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return project
+
+    @app.delete("/api/projects/active", status_code=204)
+    def deactivate_project(user: dict[str, Any] = Depends(current_user)) -> Response:
+        store.deactivate_project(user["id"])
+        return Response(status_code=204)
+
     @app.post("/api/attachments", status_code=201)
     async def upload_attachment(
         file: UploadFile = File(...),
@@ -185,6 +269,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             target.unlink(missing_ok=True)
             raise HTTPException(status_code=404, detail=str(error)) from error
         return {key: item[key] for key in ("id", "original_name", "content_type", "size_bytes", "created_at")}
+
+    @app.delete("/api/attachments/{attachment_id}", status_code=204)
+    def delete_attachment(attachment_id: str, user: dict[str, Any] = Depends(current_user)) -> Response:
+        item = store.delete_attachment(user["id"], attachment_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+        target = (settings.root / item["storage_path"]).resolve()
+        owned_root = settings.attachments_path.resolve()
+        if target.is_relative_to(owned_root):
+            target.unlink(missing_ok=True)
+        return Response(status_code=204)
 
     @app.post("/api/conversations/{conversation_id}/stream")
     async def stream_chat(
@@ -232,20 +327,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 yield sse("meta", {"turn_id": turn_id, "message_id": user_message["id"], "context_tokens": assembled.estimated_tokens, "sections": assembled.sections})
                 started = utcnow()
                 store.update_trace(turn_id, model_started_at=started)
-                async for text in app.state.model.stream(assembled.messages):
+                orchestrator = AssistantOrchestrator(app.state.model, registry, gateway)
+                cards: list[dict[str, Any]] = []
+                async for event in orchestrator.stream(assembled.messages, user):
                     if await request.is_disconnected():
                         raise asyncio.CancelledError()
-                    if first_token_at is None:
-                        first_token_at = utcnow()
-                        store.update_trace(turn_id, first_token_at=first_token_at)
-                    response_parts.append(text)
-                    yield sse("delta", {"text": text})
+                    if event["type"] == "content":
+                        text = str(event["text"])
+                        if first_token_at is None:
+                            first_token_at = utcnow()
+                            store.update_trace(turn_id, first_token_at=first_token_at)
+                        response_parts.append(text)
+                        yield sse("delta", {"text": text})
+                    elif event["type"] == "capability_start":
+                        yield sse("capability", {"status": "running", "capability_id": event["capability_id"], "arguments": event["arguments"]})
+                    elif event["type"] == "capability_result":
+                        card = {key: event[key] for key in ("capability_id", "arguments", "result")}
+                        cards.append(card)
+                        yield sse("capability", {"status": "complete", **card})
                 content = "".join(response_parts).strip()
                 if not content:
                     raise RuntimeError("Model completed without response content")
-                assistant = store.add_message(user["id"], conversation_id, "assistant", content, "complete")
+                assistant = store.add_message(user["id"], conversation_id, "assistant", content, "complete", {"capability_cards": cards})
                 completed = utcnow()
-                detail = {"characters": len(content), "attachments": len(attachments)}
+                detail = {"characters": len(content), "attachments": len(attachments), "capability_calls": len(cards)}
                 store.update_trace(turn_id, completed_at=completed, status="complete", detail=detail)
                 turn_logger.info(json.dumps({"event": "turn_complete", "turn_id": turn_id, "conversation_id": conversation_id, "user_id": user["id"], "first_token_at": first_token_at, **detail}))
                 yield sse("done", {"message_id": assistant["id"], "status": "complete"})
@@ -270,13 +375,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.get("/api/capabilities")
-    def list_capabilities(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-        return {"registry_version": registry.version, "capabilities": registry.list_for(user)}
+    async def list_capabilities(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        capabilities = [dict(item) for item in registry.list_for(user)]
+        calibration_health = await calibration_iq_health(settings)
+        for item in capabilities:
+            if item["id"] == "calibration_iq.repair_orders.read":
+                item["health"] = calibration_health["status"]
+            elif item["id"].startswith("adas."):
+                item["health"] = "available" if (settings.adas_database_path or settings.root / "data/knowledge/adas_knowledge.sqlite").exists() else "offline"
+        return {"registry_version": registry.version, "capabilities": capabilities}
 
     @app.post("/api/capabilities/{capability_id}")
-    def execute_capability(capability_id: str, payload: CapabilityCall, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    async def execute_capability(capability_id: str, payload: CapabilityCall, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         try:
-            result, decision = gateway.execute(capability_id, user, payload.arguments)
+            result, decision = await gateway.execute(capability_id, user, payload.arguments)
         except CapabilityDenied as error:
             raise HTTPException(status_code=403, detail="Capability is not authorized for this user") from error
         except KeyError as error:
@@ -289,6 +401,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="Administrator role required")
         store.revoke_user_sessions(user_id)
         return Response(status_code=204)
+
+    @app.patch("/api/admin/users/{user_id}/preferred-name")
+    def update_preferred_name(user_id: str, payload: PreferredNameUpdate, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        if user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Administrator role required")
+        updated = store.set_preferred_name(user_id, payload.preferred_name)
+        if not updated:
+            raise HTTPException(status_code=404, detail="User not found")
+        return {"id": updated["id"], "conversational_name": updated.get("preferred_name") or "User", "role": updated["role"]}
 
     static_dir = settings.root / "app" / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")

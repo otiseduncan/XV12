@@ -49,6 +49,7 @@ class UserScopedStore:
                     email TEXT NOT NULL,
                     email_verified INTEGER NOT NULL,
                     display_name TEXT NOT NULL,
+                    preferred_name TEXT,
                     role TEXT NOT NULL CHECK(role IN ('admin','user')),
                     status TEXT NOT NULL CHECK(status IN ('active','disabled')),
                     capability_state TEXT NOT NULL DEFAULT '{}',
@@ -87,6 +88,7 @@ class UserScopedStore:
                     role TEXT NOT NULL CHECK(role IN ('user','assistant')),
                     content TEXT NOT NULL,
                     status TEXT NOT NULL CHECK(status IN ('complete','interrupted','failed')),
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS messages_user_conversation ON messages(user_id, conversation_id, created_at);
@@ -127,11 +129,33 @@ class UserScopedStore:
                     status TEXT NOT NULL,
                     detail TEXT NOT NULL DEFAULT '{}'
                 );
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    reference TEXT,
+                    description TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL CHECK(status IN ('active','closed')) DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS projects_user_updated ON projects(user_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS active_projects (
+                    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    activated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 """
             )
+            user_columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
+            if "preferred_name" not in user_columns:
+                db.execute("ALTER TABLE users ADD COLUMN preferred_name TEXT")
+            message_columns = {row["name"] for row in db.execute("PRAGMA table_info(messages)")}
+            if "metadata_json" not in message_columns:
+                db.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'")
             db.execute(
-                "INSERT INTO app_meta(key,value) VALUES('schema_version','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+                "INSERT INTO app_meta(key,value) VALUES('schema_version','2') ON CONFLICT(key) DO UPDATE SET value=excluded.value"
             )
         self._ensure_owner_record()
 
@@ -141,11 +165,11 @@ class UserScopedStore:
             db.execute("UPDATE users SET role='user' WHERE role='admin' AND google_sub<>?", (self.owner_google_sub,))
             owner = db.execute("SELECT id FROM users WHERE google_sub=?", (self.owner_google_sub,)).fetchone()
             if owner:
-                db.execute("UPDATE users SET role='admin' WHERE google_sub=?", (self.owner_google_sub,))
+                db.execute("UPDATE users SET role='admin',preferred_name='Otis' WHERE google_sub=?", (self.owner_google_sub,))
             else:
                 db.execute(
-                    "INSERT INTO users(id,google_sub,email,email_verified,display_name,role,status,created_at) VALUES(?,?,?,?,?,'admin','active',?)",
-                    (str(uuid.uuid4()), self.owner_google_sub, "owner@pending.invalid", 0, "XODUZ Owner", now),
+                    "INSERT INTO users(id,google_sub,email,email_verified,display_name,preferred_name,role,status,created_at) VALUES(?,?,?,?,?,?,'admin','active',?)",
+                    (str(uuid.uuid4()), self.owner_google_sub, "owner@pending.invalid", 0, "Otis", "Otis", now),
                 )
 
     def upsert_oidc_user(self, *, google_sub: str, email: str, email_verified: bool, display_name: str) -> dict[str, Any]:
@@ -154,13 +178,15 @@ class UserScopedStore:
         with self.connect() as db:
             if role == "admin":
                 db.execute("UPDATE users SET role='user' WHERE role='admin' AND google_sub<>?", (google_sub,))
+            preferred_name = "Otis" if role == "admin" else (display_name.strip().split()[0] if display_name.strip() else "User")
             db.execute(
-                """INSERT INTO users(id,google_sub,email,email_verified,display_name,role,status,created_at,last_login_at)
-                   VALUES(?,?,?,?,?,?, 'active',?,?)
+                """INSERT INTO users(id,google_sub,email,email_verified,display_name,preferred_name,role,status,created_at,last_login_at)
+                   VALUES(?,?,?,?,?,?,?, 'active',?,?)
                    ON CONFLICT(google_sub) DO UPDATE SET
                      email=excluded.email,email_verified=excluded.email_verified,display_name=excluded.display_name,
+                     preferred_name=CASE WHEN users.preferred_name IS NULL OR users.preferred_name='' THEN excluded.preferred_name ELSE users.preferred_name END,
                      role=excluded.role,last_login_at=excluded.last_login_at""",
-                (str(uuid.uuid4()), google_sub, email, int(email_verified), display_name, role, now, now),
+                (str(uuid.uuid4()), google_sub, email, int(email_verified), display_name, preferred_name, role, now, now),
             )
             row = db.execute("SELECT * FROM users WHERE google_sub=?", (google_sub,)).fetchone()
             return dict(row)
@@ -202,6 +228,13 @@ class UserScopedStore:
         with self.connect() as db:
             db.execute("UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (utcnow(), user_id))
 
+    def set_preferred_name(self, user_id: str, preferred_name: str) -> dict[str, Any] | None:
+        value = preferred_name.strip()[:80] or "User"
+        with self.connect() as db:
+            db.execute("UPDATE users SET preferred_name=? WHERE id=? AND role='user'", (value, user_id))
+            row = db.execute("SELECT * FROM users WHERE id=? AND role='user'", (user_id,)).fetchone()
+            return dict(row) if row else None
+
     def create_oidc_attempt(self) -> tuple[str, str]:
         state, nonce = secrets.token_urlsafe(36), secrets.token_urlsafe(36)
         now = datetime.now(UTC)
@@ -234,28 +267,56 @@ class UserScopedStore:
         with self.connect() as db:
             return [dict(row) for row in db.execute("SELECT * FROM conversations WHERE user_id=? ORDER BY updated_at DESC", (user_id,))]
 
+    def rename_conversation(self, user_id: str, conversation_id: str, title: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            db.execute(
+                "UPDATE conversations SET title=?,updated_at=? WHERE id=? AND user_id=?",
+                (title.strip()[:100] or "Conversation", utcnow(), conversation_id, user_id),
+            )
+            row = db.execute("SELECT * FROM conversations WHERE id=? AND user_id=?", (conversation_id, user_id)).fetchone()
+            return dict(row) if row else None
+
+    def delete_conversation(self, user_id: str, conversation_id: str) -> bool:
+        with self.connect() as db:
+            cursor = db.execute("DELETE FROM conversations WHERE id=? AND user_id=?", (conversation_id, user_id))
+            return cursor.rowcount == 1
+
     def get_conversation(self, user_id: str, conversation_id: str) -> dict[str, Any] | None:
         with self.connect() as db:
             row = db.execute("SELECT * FROM conversations WHERE id=? AND user_id=?", (conversation_id, user_id)).fetchone()
             if not row:
                 return None
             item = dict(row)
-            item["messages"] = [dict(message) for message in db.execute("SELECT * FROM messages WHERE conversation_id=? AND user_id=? ORDER BY created_at", (conversation_id, user_id))]
+            item["messages"] = [self._message_dict(message) for message in db.execute("SELECT * FROM messages WHERE conversation_id=? AND user_id=? ORDER BY created_at", (conversation_id, user_id))]
             item["attachments"] = [dict(att) for att in db.execute("SELECT id,original_name,content_type,size_bytes,created_at FROM attachments WHERE conversation_id=? AND user_id=? ORDER BY created_at", (conversation_id, user_id))]
             return item
 
-    def add_message(self, user_id: str, conversation_id: str, role: str, content: str, status: str = "complete") -> dict[str, Any]:
+    @staticmethod
+    def _message_dict(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["metadata"] = json.loads(item.pop("metadata_json", "{}") or "{}")
+        return item
+
+    def add_message(
+        self,
+        user_id: str,
+        conversation_id: str,
+        role: str,
+        content: str,
+        status: str = "complete",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         message_id, now = str(uuid.uuid4()), utcnow()
         with self.connect() as db:
             owned = db.execute("SELECT title FROM conversations WHERE id=? AND user_id=?", (conversation_id, user_id)).fetchone()
             if not owned:
                 raise KeyError("conversation not found")
-            db.execute("INSERT INTO messages(id,user_id,conversation_id,role,content,status,created_at) VALUES(?,?,?,?,?,?,?)", (message_id, user_id, conversation_id, role, content, status, now))
+            db.execute("INSERT INTO messages(id,user_id,conversation_id,role,content,status,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?)", (message_id, user_id, conversation_id, role, content, status, json.dumps(metadata or {}), now))
             if role == "user" and owned["title"] == "New conversation":
                 db.execute("UPDATE conversations SET title=?,updated_at=? WHERE id=? AND user_id=?", (content.strip()[:72] or "Conversation", now, conversation_id, user_id))
             else:
                 db.execute("UPDATE conversations SET updated_at=? WHERE id=? AND user_id=?", (now, conversation_id, user_id))
-            return dict(db.execute("SELECT * FROM messages WHERE id=? AND user_id=?", (message_id, user_id)).fetchone())
+            return self._message_dict(db.execute("SELECT * FROM messages WHERE id=? AND user_id=?", (message_id, user_id)).fetchone())
 
     def recent_messages(self, user_id: str, conversation_id: str, limit: int = 80) -> list[dict[str, Any]]:
         with self.connect() as db:
@@ -297,6 +358,55 @@ class UserScopedStore:
                 raise KeyError("conversation not found")
             db.execute("INSERT INTO attachments(id,user_id,conversation_id,original_name,storage_path,content_type,size_bytes,created_at) VALUES(?,?,?,?,?,?,?,?)", (attachment_id, user_id, conversation_id, original_name, storage_path, content_type, size_bytes, utcnow()))
             return dict(db.execute("SELECT * FROM attachments WHERE id=? AND user_id=?", (attachment_id, user_id)).fetchone())
+
+    def delete_attachment(self, user_id: str, attachment_id: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM attachments WHERE id=? AND user_id=?", (attachment_id, user_id)).fetchone()
+            if not row:
+                return None
+            db.execute("DELETE FROM attachments WHERE id=? AND user_id=?", (attachment_id, user_id))
+            return dict(row)
+
+    def create_project(self, user_id: str, name: str, reference: str | None, description: str = "") -> dict[str, Any]:
+        project_id, now = str(uuid.uuid4()), utcnow()
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO projects(id,user_id,name,reference,description,status,created_at,updated_at) VALUES(?,?,?,?,?,'active',?,?)",
+                (project_id, user_id, name.strip()[:120], (reference or "").strip()[:500] or None, description.strip()[:2000], now, now),
+            )
+            return dict(db.execute("SELECT * FROM projects WHERE id=? AND user_id=?", (project_id, user_id)).fetchone())
+
+    def list_projects(self, user_id: str) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            active = db.execute("SELECT project_id FROM active_projects WHERE user_id=?", (user_id,)).fetchone()
+            active_id = active["project_id"] if active else None
+            return [
+                {**dict(row), "is_active": row["id"] == active_id}
+                for row in db.execute("SELECT * FROM projects WHERE user_id=? ORDER BY updated_at DESC", (user_id,))
+            ]
+
+    def activate_project(self, user_id: str, project_id: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM projects WHERE id=? AND user_id=? AND status='active'", (project_id, user_id)).fetchone()
+            if not row:
+                return None
+            db.execute(
+                "INSERT INTO active_projects(user_id,project_id,activated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET project_id=excluded.project_id,activated_at=excluded.activated_at",
+                (user_id, project_id, utcnow()),
+            )
+            return {**dict(row), "is_active": True}
+
+    def deactivate_project(self, user_id: str) -> bool:
+        with self.connect() as db:
+            return db.execute("DELETE FROM active_projects WHERE user_id=?", (user_id,)).rowcount > 0
+
+    def active_project(self, user_id: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT p.* FROM active_projects a JOIN projects p ON p.id=a.project_id WHERE a.user_id=? AND p.user_id=? AND p.status='active'",
+                (user_id, user_id),
+            ).fetchone()
+            return dict(row) if row else None
 
     def attach_to_conversation(self, user_id: str, conversation_id: str, attachment_ids: list[str]) -> list[dict[str, Any]]:
         if not attachment_ids:

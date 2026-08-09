@@ -27,7 +27,11 @@ class LlamaModel:
         except Exception as error:
             return {"reachable": False, "alias_ok": False, "models": [], "error": type(error).__name__}
 
-    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+    async def stream_events(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
         payload = {
             "model": self.settings.model_alias,
             "messages": messages,
@@ -35,6 +39,10 @@ class LlamaModel:
             "temperature": self.settings.model_temperature,
             "max_tokens": self.settings.model_max_tokens,
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        pending_calls: dict[int, dict[str, Any]] = {}
         async with httpx.AsyncClient(timeout=httpx.Timeout(15, read=300, write=30, pool=15)) as client:
             async with client.stream("POST", f"{self.settings.model_base_url}/chat/completions", json=payload) as response:
                 if response.status_code != 200:
@@ -48,11 +56,26 @@ class LlamaModel:
                         continue
                     try:
                         chunk = json.loads(data)
-                        text = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        text = delta.get("content")
+                        for call in delta.get("tool_calls") or []:
+                            index = int(call.get("index", 0))
+                            current = pending_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                            current["id"] += str(call.get("id") or "")
+                            function = call.get("function") or {}
+                            current["name"] += str(function.get("name") or "")
+                            current["arguments"] += str(function.get("arguments") or "")
                     except (json.JSONDecodeError, IndexError, AttributeError):
                         continue
                     if text:
-                        yield str(text)
+                        yield {"type": "content", "text": str(text)}
+        for index in sorted(pending_calls):
+            yield {"type": "tool_call", **pending_calls[index]}
+
+    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        async for event in self.stream_events(messages):
+            if event["type"] == "content":
+                yield str(event["text"])
 
     async def complete(self, messages: list[dict[str, str]], max_tokens: int = 320) -> str:
         payload = {

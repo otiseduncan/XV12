@@ -1,0 +1,51 @@
+{
+  "result": "PASS",
+  "browser": "Codex in-app browser",
+  "desktop_viewport": {"width": 1280, "height": 720},
+  "long_conversation": {
+    "messages": 60,
+    "body_client_height": 720,
+    "body_scroll_height": 720,
+    "body_overflow": "hidden",
+    "message_client_height": 558,
+    "message_scroll_height": 6049,
+    "message_overflow_y": "auto",
+    "avatar_region": {"top": 62, "bottom": 720, "width": 270.53125},
+    "composer_region": {"top": 620, "bottom": 720, "width": 695.46875},
+    "inline_cards_rendered": 1
+  },
+  "smart_scroll": {
+    "manual_scroll_detected": true,
+    "jump_to_latest_visible": true,
+    "not_forced_to_bottom_during_stream": true
+  },
+  "collapsible_rail": {
+    "expanded_width": 278,
+    "collapsed_width": 72,
+    "avatar_remained_visible": true,
+    "composer_remained_anchored": true
+  },
+  "responsive_contract": {
+    "desktop_browser_verified": true,
+    "narrow_and_short_breakpoints": "automated CSS contract pack",
+    "mobile_drawer_breakpoint_css_pixels": 760
+  },
+  "voice": {
+    "native_runtime_attempt": "microphone permission denied by automation browser",
+    "native_failure_safe": true,
+    "controlled_test_identity_provider_adapter": "PASS",
+    "transcript": "voice acceptance proof",
+    "transcript_entered_normal_composer": true,
+    "transcript_sent_through_normal_chat": true,
+    "assistant_response_received": true,
+    "automatic_restart": false
+  },
+  "project": {
+    "conversational_register_capability": "project.register",
+    "chip_appeared": true,
+    "active_reference_recalled_from_context": "X:\\ProjectConversationProof",
+    "conversational_detach_capability": "project.detach",
+    "chip_disappeared_after_receipt": true
+  },
+  "identity": {"admin_name": "Otis", "role": "admin", "source": "authenticated session"}
+}

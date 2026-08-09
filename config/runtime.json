@@ -18,11 +18,12 @@
   },
   "storage": {
     "database": "data/xv12.db",
-    "attachments": "data/attachments"
+    "attachments": "data/attachments",
+    "adas_database": "data/knowledge/adas_knowledge.sqlite"
   },
   "versions": {
-    "database_schema": 1,
-    "migration": "0001_baseline_core",
-    "capability_registry": "1.0.0"
+    "database_schema": 2,
+    "migration": "0002_functional_assistant",
+    "capability_registry": "2.0.0"
   }
 }

@@ -34,7 +34,18 @@ class ContextAssembler:
 
     def assemble(self, user: dict[str, Any], conversation_id: str) -> AssembledContext:
         sections = ["identity", "authenticated_user"]
-        system_parts = [IDENTITY_CONTRACT, f"Authenticated user: {user['display_name']} (role: {user['role']})."]
+        conversational_name = "Otis" if user["role"] == "admin" else (user.get("preferred_name") or user["display_name"].strip().split()[0] or "User")
+        system_parts = [
+            IDENTITY_CONTRACT,
+            f"Authenticated user: {conversational_name} (role: {user['role']}, internal user id: {user['id']}). Address them by this conversational name when natural; never infer identity from email text. The internal id is for trusted scoping and should not be surfaced unless the user explicitly asks for the technical identifier.",
+        ]
+        project = self.store.active_project(user["id"])
+        if project:
+            sections.append("active_project")
+            system_parts.append(
+                "Active project context (user-scoped, explicitly attached): "
+                f"name={project['name']!r}, reference={project.get('reference')!r}, description={project.get('description')!r}."
+            )
         active = self.store.get_active_subject(user["id"], conversation_id)
         if active:
             sections.append("active_subject")

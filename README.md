@@ -1,6 +1,6 @@
-# XODUZ XV12 Baseline 1
+# XODUZ XV12 Functional Assistant Baseline
 
-XV12 is a standalone, local-first XODUZ application. Baseline 1 proves the core: an XV12-owned llama.cpp/Qwen runtime, model-first streaming conversation, Google OIDC, server-side sessions, sole-admin authorization, user-isolated SQLite memory, rolling context, attachments, voice dictation, and a Windows launcher.
+XV12 is a standalone, local-first XODUZ application. The functional baseline preserves the fast model-first conversation core and adds a permanent bounded shell, trusted conversational identity, optional project context, voice dictation, live current-information search, verified ADAS knowledge, authenticated Calibration IQ reads, and an admin-only allowlisted Calibration IQ start action.
 
 ## Start XODUZ
 
@@ -35,7 +35,9 @@ The sole administrator is bound by `XV12_OWNER_GOOGLE_SUB`. Email is profile dat
 - llama-server: `http://127.0.0.1:8121/v1`
 - Model alias: `xoduz-qwen3-coder-30b`
 - Context: 32,768 tokens
-- Database: `data/xv12.db`
+- Application database: `data/xv12.db`
+- XV12-owned ADAS database: `data/knowledge/adas_knowledge.sqlite`
+- Independent Calibration IQ API: local scoped read-only service
 - Attachments: `data/attachments/<internal-user-id>/`
 - Operational logs: `logs/`
 
@@ -49,7 +51,7 @@ Private persistence is centralized in `UserScopedStore`; each conversation, mess
 
 The context order is stable identity, authenticated user, active subject, rolling summary, then recent conversation. Per-turn traces record section and size accounting plus streaming lifecycle timestamps without recording hidden reasoning.
 
-Baseline 1 intentionally exposes only a small versioned capability foundation. Broader search and execution capabilities remain deferred.
+Capability awareness is generated from `config/capabilities.v1.json`. Ordinary conversation remains a direct one-call stream; native model-selected tools enter a bounded function loop only when needed.
 
 ## Validation
 
@@ -59,7 +61,7 @@ Run every fast pack:
 scripts\run-regression.ps1 -Pack all
 ```
 
-Run a focused pack with one of: `chat-core`, `auth`, `authorization`, `session`, `memory-isolation`, `context`, `model-runtime`, `launcher`, or `registry-gateway`.
+Focused packs include `chat-core`, `ui-shell`, `auth`, `user-identity`, `memory-isolation`, `voice`, `project-context`, `capability-registry`, `web`, `databases`, `attachments`, and `launcher`.
 
 Run the live production-route acceptance checks while XV12 is running:
 
@@ -67,4 +69,4 @@ Run the live production-route acceptance checks while XV12 is running:
 scripts\acceptance.ps1
 ```
 
-The immutable freeze evidence is in `config/baseline-manifest.json` and the annotated Git tag `xv12-baseline-core-v1`.
+The original core freeze remains tagged `xv12-baseline-core-v1`. Functional-assistant evidence is under `docs/evidence/` and frozen by `xv12-baseline-functional-assistant-v1`.

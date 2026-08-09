@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -35,6 +36,30 @@ class CapabilityRegistry:
     def list_for(self, user: dict[str, Any]) -> list[dict[str, Any]]:
         return [item for item in self.capabilities.values() if user["role"] in item["authorization"]["roles"]]
 
+    @staticmethod
+    def tool_name(capability_id: str) -> str:
+        return capability_id.replace(".", "_")
+
+    def capability_id_for_tool(self, tool_name: str) -> str:
+        for capability_id in self.capabilities:
+            if self.tool_name(capability_id) == tool_name:
+                return capability_id
+        raise CapabilityNotFound(tool_name)
+
+    def model_tools(self, user: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": self.tool_name(item["id"]),
+                    "description": f"Registry family: {item['family']}. Registry health: {item['health']}. {item['description']}",
+                    "parameters": item["arguments_schema"],
+                },
+            }
+            for item in self.list_for(user)
+            if item.get("model_exposed", True) and item["id"] in self.capabilities
+        ]
+
     def authorize(self, capability_id: str, user: dict[str, Any]) -> AuthorizationDecision:
         capability = self.capabilities.get(capability_id)
         if not capability:
@@ -61,11 +86,14 @@ class CapabilityGateway:
             raise CapabilityNotFound(capability_id)
         self.handlers[capability_id] = handler
 
-    def execute(self, capability_id: str, user: dict[str, Any], arguments: dict[str, Any]) -> tuple[Any, AuthorizationDecision]:
+    async def execute(self, capability_id: str, user: dict[str, Any], arguments: dict[str, Any]) -> tuple[Any, AuthorizationDecision]:
         decision = self.registry.authorize(capability_id, user)
         if not decision.allowed:
             raise CapabilityDenied(decision.reason)
         handler = self.handlers.get(capability_id)
         if not handler:
             raise CapabilityNotFound(f"No handler registered for {capability_id}")
-        return handler(arguments), decision
+        result = handler(arguments, user) if len(inspect.signature(handler).parameters) >= 2 else handler(arguments)
+        if inspect.isawaitable(result):
+            result = await result
+        return result, decision

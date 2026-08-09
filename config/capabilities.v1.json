@@ -1,33 +1,93 @@
 {
-  "registry_version": "1.0.0",
+  "registry_version": "2.0.0",
   "capabilities": [
     {
-      "id": "system.health.read",
-      "family": "system",
-      "description": "Read XV12 application and model health.",
-      "version": "1.0.0",
-      "risk_tier": 0,
-      "authorization": {"roles": ["admin", "user"]},
-      "arguments_schema": {"type": "object", "additionalProperties": false},
-      "result_schema": {"type": "object"},
-      "timeout_seconds": 5,
-      "health": "available",
-      "execution_environment": "xv12-backend",
-      "idempotency": "safe"
+      "id": "system.health.read", "family": "system",
+      "description": "Read the current health of XV12, its local model, and registered data services.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 8, "health": "available",
+      "execution_environment": "xv12-backend", "idempotency": "safe"
     },
     {
-      "id": "admin.capabilities.inspect",
-      "family": "administration",
+      "id": "web.current.search", "family": "web",
+      "description": "Search the live web for current information or news. Use this whenever freshness matters, for recent events, or after a local database returns no result.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "mode": {"type": "string", "enum": ["current", "news", "general"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 8}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 25, "health": "available",
+      "execution_environment": "network-read", "idempotency": "safe"
+    },
+    {
+      "id": "adas.coverage.read", "family": "databases",
+      "description": "Read verified coverage inventory from the XV12-owned ADAS knowledge database. Use for counts, makes, models, years, and coverage questions.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "properties": {"make": {"type": "string"}, "model": {"type": "string"}, "year": {"type": "integer", "minimum": 1990, "maximum": 2100}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available",
+      "execution_environment": "xv12-readonly-sqlite", "idempotency": "safe"
+    },
+    {
+      "id": "adas.knowledge.search", "family": "databases",
+      "description": "Search verified, cited ADAS procedures and calibration requirements in the XV12-owned database. Do not treat no_result as proof that no external information exists.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "year": {"type": "integer", "minimum": 1990, "maximum": 2100}, "make": {"type": "string"}, "model": {"type": "string"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available",
+      "execution_environment": "xv12-readonly-sqlite", "idempotency": "safe"
+    },
+    {
+      "id": "calibration_iq.repair_orders.read", "family": "databases",
+      "description": "Read, count, filter, or search repair orders through the authenticated Calibration IQ read-only API. For a count question set limit to 1. Results are bounded. If offline, tell the administrator it can be started with the registered service action.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "properties": {"q": {"type": "string"}, "shop": {"type": "string"}, "insurance": {"type": "string"}, "status": {"type": "string"}, "phase": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "offset": {"type": "integer", "minimum": 0}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 25, "health": "dynamic",
+      "execution_environment": "calibration-iq-authenticated-api", "idempotency": "safe"
+    },
+    {
+      "id": "project.list", "family": "projects",
+      "description": "List only the authenticated user's registered projects and show which one is attached to the conversation context.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available",
+      "execution_environment": "xv12-backend", "idempotency": "safe"
+    },
+    {
+      "id": "project.register", "family": "projects",
+      "description": "Register and activate an optional user-scoped project reference after the user asks to register, attach, or track one. This never scans or executes the path.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "reference": {"type": "string"}, "description": {"type": "string"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available",
+      "execution_environment": "xv12-backend", "idempotency": "user-requested-write"
+    },
+    {
+      "id": "project.activate", "family": "projects",
+      "description": "Attach one of the authenticated user's registered projects as active context. Requires its exact project id from project.list or project.register.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["project_id"], "properties": {"project_id": {"type": "string"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available",
+      "execution_environment": "xv12-backend", "idempotency": "safe"
+    },
+    {
+      "id": "project.detach", "family": "projects",
+      "description": "Detach the authenticated user's active project from conversational context without deleting it. You must call this whenever the user asks to close, detach, clear, or stop using the active project.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available",
+      "execution_environment": "xv12-backend", "idempotency": "safe"
+    },
+    {
+      "id": "service.calibration_iq.start", "family": "services",
+      "description": "Start the one allowlisted offline Calibration IQ Docker Compose service, then verify health. Use only when Otis explicitly asks to start it; this cannot run arbitrary commands or paths.",
+      "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]},
+      "arguments_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 180, "health": "available",
+      "execution_environment": "fixed-calibration-iq-launcher", "idempotency": "safe"
+    },
+    {
+      "id": "admin.capabilities.inspect", "family": "administration",
       "description": "Inspect capability authorization metadata.",
-      "version": "1.0.0",
-      "risk_tier": 2,
-      "authorization": {"roles": ["admin"]},
-      "arguments_schema": {"type": "object", "additionalProperties": false},
-      "result_schema": {"type": "object"},
-      "timeout_seconds": 5,
-      "health": "available",
-      "execution_environment": "xv12-backend",
-      "idempotency": "safe"
+      "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]},
+      "arguments_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available",
+      "execution_environment": "xv12-backend", "idempotency": "safe", "model_exposed": false
     }
   ]
 }

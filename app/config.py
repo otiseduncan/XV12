@@ -43,6 +43,10 @@ class Settings:
     owner_google_sub: str
     cookie_secure: bool
     session_ttl_seconds: int = 60 * 60 * 24 * 14
+    adas_database_path: Path | None = None
+    calibration_iq_base_url: str = "http://127.0.0.1:8084/api/v1/tools/v1/calibration-iq"
+    calibration_iq_project_path: Path = Path(r"X:\calibration iq")
+    web_timeout_seconds: int = 20
 
     @property
     def model_base_url(self) -> str:
@@ -75,4 +79,13 @@ class Settings:
             google_redirect_uri=os.getenv("XV12_GOOGLE_REDIRECT_URI", "").strip(),
             owner_google_sub=owner_sub,
             cookie_secure=os.getenv("XV12_COOKIE_SECURE", "1").strip() not in {"0", "false", "False"},
+            adas_database_path=ROOT / os.getenv("XV12_ADAS_DATABASE_PATH", storage["adas_database"]),
+            calibration_iq_base_url=os.getenv(
+                "XV12_CALIBRATION_IQ_BASE_URL",
+                "http://127.0.0.1:8084/api/v1/tools/v1/calibration-iq",
+            ).rstrip("/"),
+            calibration_iq_project_path=Path(
+                os.getenv("XV12_CALIBRATION_IQ_PROJECT_PATH", r"X:\calibration iq")
+            ),
+            web_timeout_seconds=int(os.getenv("XV12_WEB_TIMEOUT_SECONDS", "20")),
         )

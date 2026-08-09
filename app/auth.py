@@ -23,10 +23,12 @@ class TestLoginRequest(BaseModel):
 
 
 def public_user(user: dict[str, Any]) -> dict[str, Any]:
+    conversational_name = "Otis" if user["role"] == "admin" else (user.get("preferred_name") or user["display_name"].strip().split()[0] or "User")
     return {
         "id": user["id"],
         "email": user["email"],
         "display_name": user["display_name"],
+        "conversational_name": conversational_name,
         "role": user["role"],
         "status": user["status"],
     }
@@ -99,9 +101,9 @@ def create_auth_router(settings: Settings) -> APIRouter:
         if settings.auth_mode != "test":
             raise HTTPException(status_code=404, detail="Test identity provider is disabled")
         personas = {
-            "admin": (settings.owner_google_sub, "owner@xv12.test", "XV12 Owner"),
-            "user-a": ("test-user-a-sub", "user-a@xv12.test", "Test User A"),
-            "user-b": ("test-user-b-sub", "user-b@xv12.test", "Test User B"),
+            "admin": (settings.owner_google_sub, "owner@xv12.test", "Otis"),
+            "user-a": ("test-user-a-sub", "user-a@xv12.test", "Avery User"),
+            "user-b": ("test-user-b-sub", "user-b@xv12.test", "Blair User"),
         }
         if payload.persona not in personas:
             raise HTTPException(status_code=400, detail="Unknown controlled test identity")
@@ -161,7 +163,7 @@ def create_auth_router(settings: Settings) -> APIRouter:
             google_sub=claims["sub"],
             email=claims.get("email", ""),
             email_verified=bool(claims.get("email_verified")),
-            display_name=claims.get("name") or claims.get("email") or "Google user",
+            display_name=claims.get("name") or "User",
         )
         token = store.create_session(user["id"], settings.session_ttl_seconds)
         response = RedirectResponse("/", status_code=303)

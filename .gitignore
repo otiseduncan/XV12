@@ -13,6 +13,8 @@ runtime/tmp/
 logs/
 data/*.db
 data/*.db-*
+data/**/*.sqlite
+data/**/*.sqlite-*
 data/attachments/
 models/**/*.gguf
 runtime/llama.cpp/*

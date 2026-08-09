@@ -14,8 +14,10 @@ from .conftest import login
 def test_registry_is_versioned_and_gateway_executes_registered_tier_zero(client):
     login(client, "user-a")
     listing = client.get("/api/capabilities").json()
-    assert listing["registry_version"] == "1.0.0"
-    assert [item["id"] for item in listing["capabilities"]] == ["system.health.read"]
+    assert listing["registry_version"] == "2.0.0"
+    ids = {item["id"] for item in listing["capabilities"]}
+    assert {"system.health.read", "web.current.search", "adas.coverage.read", "project.list"} <= ids
+    assert "service.calibration_iq.start" not in ids
     result = client.post("/api/capabilities/system.health.read", json={"arguments": {}})
     assert result.status_code == 200
     assert result.json()["authorization"]["allowed"] is True
@@ -43,7 +45,7 @@ def test_health_verifies_expected_model_alias_context_and_owned_paths(client):
 @pytest.mark.launcher
 def test_runtime_configuration_uses_only_xv12_relative_paths():
     config = json.loads((ROOT / "config" / "runtime.json").read_text(encoding="utf-8"))
-    for path in (config["model"]["executable"], config["model"]["path"], config["storage"]["database"], config["storage"]["attachments"]):
+    for path in (config["model"]["executable"], config["model"]["path"], config["storage"]["database"], config["storage"]["attachments"], config["storage"]["adas_database"]):
         assert not Path(path).is_absolute()
         assert (ROOT / path).resolve().is_relative_to(ROOT.resolve())
     assert (ROOT / "Launch-XODUZ.cmd").exists()

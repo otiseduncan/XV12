@@ -27,7 +27,8 @@ $ownedPaths = @(
     (Join-Path $script:XV12Root $runtimeConfig.model.executable),
     (Join-Path $script:XV12Root $runtimeConfig.model.path),
     (Join-Path $script:XV12Root $runtimeConfig.storage.database),
-    (Join-Path $script:XV12Root $runtimeConfig.storage.attachments)
+    (Join-Path $script:XV12Root $runtimeConfig.storage.attachments),
+    (Join-Path $script:XV12Root $runtimeConfig.storage.adas_database)
 )
 $outside = @($ownedPaths | Where-Object { -not [IO.Path]::GetFullPath($_).StartsWith($script:XV12Root, [StringComparison]::OrdinalIgnoreCase) })
 if ($hits.Count -gt 0 -or $outside.Count -gt 0) {
