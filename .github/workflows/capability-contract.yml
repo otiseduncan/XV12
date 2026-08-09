@@ -16,7 +16,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.14'
-      - name: Install focused test dependency
-        run: python -m pip install --disable-pip-version-check pytest
+      - name: Install focused test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
       - name: Run capability truth and inventory regressions
         run: python -m pytest -q tests/test_capability_truth_inventory.py
