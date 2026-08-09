@@ -1,0 +1,31 @@
+{
+  "schema_version": "1",
+  "standalone_rule": "External authoritative data and independently operated services are allowed; historical-project runtime code is forbidden.",
+  "dependencies": [
+    {
+      "capability_family": "adas_si",
+      "kind": "authoritative_external_data",
+      "location": "X:\\ADAS SI",
+      "runtime_code_dependency": false,
+      "managed_write_root": "X:\\ADAS SI\\_xv12_managed",
+      "originals_immutable": true,
+      "cache": "data/capabilities/adas_si/index.sqlite",
+      "cache_rebuildable": true
+    },
+    {
+      "capability_family": "calibration_iq",
+      "kind": "independent_authenticated_service",
+      "base_url_environment": "XV12_CALIBRATION_IQ_BASE_URL",
+      "default_base_url": "http://127.0.0.1:8084/api/v1/tools/v1/calibration-iq",
+      "credential_source": "independent service configuration",
+      "runtime_code_dependency": false
+    },
+    {
+      "capability_family": "web",
+      "kind": "internet_provider",
+      "providers": ["Bing News RSS", "DuckDuckGo HTML"],
+      "runtime_code_dependency": false
+    }
+  ],
+  "forbidden_runtime_projects": ["XV11", "BB1", "historical XODUZ projects"]
+}

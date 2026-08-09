@@ -341,6 +341,24 @@ function renderAttachmentChips() {
 
 async function loadProjects() { state.projects = await api("/api/projects"); $("#project-count").textContent = state.projects.length; const active = state.projects.find((item) => item.is_active); const chip = $("#active-project-chip"); chip.classList.toggle("hidden", !active); chip.textContent = active ? `▱ ${active.name} ×` : ""; }
 
+async function renderCapabilityAdmin(content) {
+  const [users, catalog] = await Promise.all([api("/api/admin/capabilities/users"), api("/api/admin/capabilities/catalog")]);
+  content.innerHTML = `<p class="eyebrow">ADMIN · REGISTRY ${catalog.registry_version}</p><h2>User capabilities</h2><p>Choose a normal user, grant only the scopes they need, then save. Changes are enforced by the gateway immediately.</p><label class="admin-user-label">Registered user<select id="capability-user"></select></label><form id="capability-grants" class="capability-grants"></form>`;
+  const select = content.querySelector("#capability-user");
+  users.forEach((user) => { const option = document.createElement("option"); option.value = user.id; option.textContent = `${user.display_name} · ${user.email} · ${user.role} · ${user.status}`; option.disabled = user.role === "admin"; select.append(option); });
+  const normal = users.find((user) => user.role !== "admin");
+  if (!normal) { content.querySelector("form").innerHTML = `<p class="setting-note">No normal users are registered yet.</p>`; select.disabled = true; return; }
+  select.value = normal.id;
+  const loadGrants = async () => {
+    const current = await api(`/api/admin/capabilities/users/${select.value}/grants`); const form = content.querySelector("#capability-grants"); form.replaceChildren();
+    catalog.families.forEach((family) => { const scopes = new Set(current.grants[family.family] || []); const card = document.createElement("fieldset"); card.className = "capability-grant"; card.dataset.family = family.family; card.disabled = family.health === "unavailable"; const legend = document.createElement("legend"); legend.textContent = family.label; const description = document.createElement("p"); description.textContent = `${family.description} · ${family.health}`; card.append(legend, description); family.allowed_scopes.forEach((scope) => { const label = document.createElement("label"); const box = document.createElement("input"); box.type = "checkbox"; box.name = scope; box.checked = scopes.has(scope); label.append(box, document.createTextNode(` ${scope}`)); card.append(label); }); form.append(card); });
+    const actions = document.createElement("div"); actions.className = "settings-actions"; actions.innerHTML = `<button class="primary-button" type="submit">Save permissions</button><button id="revoke-capabilities" class="secondary-button" type="button">Revoke all access</button><span class="setting-note" id="permission-status"></span>`; form.append(actions);
+    form.onsubmit = async (event) => { event.preventDefault(); const grants = [...form.querySelectorAll("fieldset")].map((field) => ({ family: field.dataset.family, scopes: [...field.querySelectorAll("input:checked")].map((box) => box.name) })).filter((item) => item.scopes.length); const result = await api(`/api/admin/capabilities/users/${select.value}/grants`, { method: "PUT", body: JSON.stringify({ grants }) }); form.querySelector("#permission-status").textContent = result.effective_immediately ? "Saved · effective now" : "Saved"; toast("Capability permissions updated.", "success"); };
+    form.querySelector("#revoke-capabilities").onclick = async () => { await api(`/api/admin/capabilities/users/${select.value}/grants`, { method: "DELETE" }); toast("Capability access and active sessions revoked.", "success"); await loadGrants(); };
+  };
+  select.addEventListener("change", loadGrants); await loadGrants();
+}
+
 async function showModal(kind) {
   const content = $("#modal-content");
   if (kind === "projects") {
@@ -349,8 +367,11 @@ async function showModal(kind) {
     content.querySelector("#project-form").addEventListener("submit", async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); const project = await api("/api/projects", { method: "POST", body: JSON.stringify(data) }); await api(`/api/projects/${project.id}/activate`, { method: "POST" }); await loadProjects(); await showModal("projects"); toast("Project registered and activated.", "success"); });
   } else if (kind === "tools") {
     const listing = await api("/api/capabilities"); content.innerHTML = `<p class="eyebrow">AUTHORITATIVE REGISTRY</p><h2>Capabilities</h2><p>${listing.capabilities.length} capabilities are authorized for this account.</p><ul class="modal-list"></ul>`; const list = content.querySelector("ul"); listing.capabilities.forEach((item) => { const li = document.createElement("li"); li.innerHTML = `<strong></strong><span></span>`; li.querySelector("strong").textContent = item.id; li.querySelector("span").textContent = `Tier ${item.risk_tier} · ${item.health} · ${item.description}`; list.append(li); });
+  } else if (kind === "admin-capabilities") {
+    await renderCapabilityAdmin(content);
   } else {
     content.innerHTML = `<p class="eyebrow">XODUZ XV12</p><h2>Settings</h2><p>Preferences are private to your authenticated account.</p><section class="settings-section"><h3>Appearance</h3><div class="setting-row"><span class="setting-label">Theme</span><span class="account-value">XODUZ Dark</span></div></section><section class="settings-section"><h3>Voice</h3><div class="setting-row"><label for="voice-select">XODUZ voice</label><select id="voice-select" aria-label="XODUZ voice"></select></div><p id="voice-runtime" class="setting-note"></p><div class="setting-row"><label for="voice-volume">Volume</label><div class="volume-control"><input id="voice-volume" type="range" min="0" max="100" step="1"><output id="voice-volume-value" for="voice-volume"></output></div></div><div class="setting-row"><span class="setting-label">Spoken output</span><label class="toggle-control"><input id="voice-muted" type="checkbox"> Mute X</label></div><div class="setting-row"><span class="setting-label">Test output</span><div class="settings-actions"><button id="preview-voice" class="secondary-button" type="button">Preview Voice</button></div></div><p id="voice-preview-status" class="setting-note" aria-live="polite"></p></section><section class="settings-section"><h3>Account</h3><div class="setting-row"><span class="setting-label">Signed in</span><span id="settings-account" class="account-value"></span></div><div class="setting-row"><span class="setting-label">Session</span><button id="settings-logout" class="secondary-button" type="button">Log out</button></div></section>`;
+    if (state.user.role === "admin") content.insertAdjacentHTML("beforeend", `<section class="settings-section"><h3>Admin</h3><div class="setting-row"><span class="setting-label">User capability access</span><button id="admin-capability-settings" class="secondary-button" type="button">Manage permissions</button></div></section>`);
     $("#settings-account").textContent = `${state.user.conversational_name} · ${state.user.role}`;
     refreshVoiceControls();
     $("#voice-select").addEventListener("change", (event) => saveVoiceSettings({ voice_name: event.target.value }));
@@ -362,6 +383,7 @@ async function showModal(kind) {
       $("#voice-preview-status").textContent = started ? `Previewing ${state.effectiveVoice.name} at ${state.voiceSettings.voice_volume}%.` : "Voice preview did not start.";
     });
     $("#settings-logout").addEventListener("click", async () => { speechEngine()?.cancel?.(); await api("/api/auth/logout", { method: "POST" }); window.location.reload(); });
+    $("#admin-capability-settings")?.addEventListener("click", () => showModal("admin-capabilities"));
   }
   if (!$("#modal").open) $("#modal").showModal();
 }

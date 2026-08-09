@@ -1,5 +1,5 @@
 {
-  "registry_version": "2.1.0",
+  "registry_version": "3.0.0",
   "capabilities": [
     {
       "id": "system.health.read", "family": "system",
@@ -10,15 +10,15 @@
       "execution_environment": "xv12-backend", "idempotency": "safe"
     },
     {
-      "id": "web.current.search", "family": "web",
+      "id": "web.current.search", "family": "web", "family_label": "Web", "family_description": "Current internet research with bounded evidence.",
       "description": "Search the live web for current information or news. Use this whenever freshness matters, for recent events, or after a local database returns no result.",
       "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
       "arguments_schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "mode": {"type": "string", "enum": ["current", "news", "general"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 8}}, "additionalProperties": false},
-      "result_schema": {"type": "object"}, "timeout_seconds": 25, "health": "available",
+      "result_schema": {"type": "object"}, "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 25, "health": "available",
       "execution_environment": "network-read", "idempotency": "safe"
     },
     {
-      "id": "adas.coverage.read", "family": "databases",
+      "id": "adas.coverage.read", "family": "adas_si", "family_label": "ADAS SI", "family_description": "Authoritative ADAS service information and managed records.",
       "description": "Read verified coverage inventory from the XV12-owned ADAS knowledge database. Use for counts, makes, models, years, and coverage questions.",
       "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
       "arguments_schema": {"type": "object", "properties": {"make": {"type": "string"}, "model": {"type": "string"}, "year": {"type": "integer", "minimum": 1990, "maximum": 2100}}, "additionalProperties": false},
@@ -26,7 +26,7 @@
       "execution_environment": "xv12-readonly-sqlite", "idempotency": "safe"
     },
     {
-      "id": "adas.knowledge.search", "family": "databases",
+      "id": "adas.knowledge.search", "family": "adas_si", "family_label": "ADAS SI", "family_description": "Authoritative ADAS service information and managed records.",
       "description": "Search verified, cited ADAS procedures and calibration requirements in the XV12-owned database. Do not treat no_result as proof that no external information exists.",
       "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
       "arguments_schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "year": {"type": "integer", "minimum": 1990, "maximum": 2100}, "make": {"type": "string"}, "model": {"type": "string"}}, "additionalProperties": false},
@@ -34,12 +34,72 @@
       "execution_environment": "xv12-readonly-sqlite", "idempotency": "safe"
     },
     {
-      "id": "calibration_iq.repair_orders.read", "family": "databases",
+      "id": "calibration_iq.repair_orders.read", "family": "calibration_iq", "family_label": "Calibration IQ", "family_description": "Independent repair-order workflow service.",
       "description": "Read, count, filter, or search repair orders through the authenticated Calibration IQ read-only API. For a count question set limit to 1. Results are bounded. If offline, tell the administrator it can be started with the registered service action.",
       "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
       "arguments_schema": {"type": "object", "properties": {"q": {"type": "string"}, "shop": {"type": "string"}, "insurance": {"type": "string"}, "status": {"type": "string"}, "phase": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "offset": {"type": "integer", "minimum": 0}}, "additionalProperties": false},
       "result_schema": {"type": "object"}, "timeout_seconds": 25, "health": "dynamic",
       "execution_environment": "calibration-iq-authenticated-api", "idempotency": "safe"
+    },
+    {
+      "id": "files.local.read", "family": "files", "family_label": "Local Files", "family_description": "Bounded structured local filesystem access without shell execution.",
+      "description": "List a configured directory or read bounded text and metadata from a configured local path.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]},
+      "arguments_schema": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 250}, "max_bytes": {"type": "integer", "minimum": 1, "maximum": 524288}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "bounded-local-files", "idempotency": "safe"
+    },
+    {
+      "id": "files.local.write", "family": "files", "family_label": "Local Files", "family_description": "Bounded structured local filesystem access without shell execution.",
+      "description": "Create a new UTF-8 text file in the authenticated user's managed file root; never overwrites.",
+      "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "supported_scopes": ["write"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write"], "user": ["write"]},
+      "arguments_schema": {"type": "object", "required": ["path", "content"], "properties": {"path": {"type": "string"}, "content": {"type": "string", "maxLength": 524288}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "user-managed-local-files", "idempotency": "fail-if-exists"
+    },
+    {
+      "id": "files.local.modify", "family": "files", "family_label": "Local Files", "family_description": "Bounded structured local filesystem access without shell execution.",
+      "description": "Replace an existing authenticated-user managed text file only when its expected SHA256 matches.",
+      "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]},
+      "arguments_schema": {"type": "object", "required": ["path", "content", "expected_sha256"], "properties": {"path": {"type": "string"}, "content": {"type": "string", "maxLength": 524288}, "expected_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "user-managed-local-files", "idempotency": "optimistic-sha256"
+    },
+    {
+      "id": "adas.si.inventory.read", "family": "adas_si", "family_label": "ADAS SI", "family_description": "Authoritative ADAS service information and managed records.",
+      "description": "Inspect the authoritative ADAS SI document inventory and rebuildable cache metadata.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]}, "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]},
+      "arguments_schema": {"type": "object", "properties": {}, "additionalProperties": false}, "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "dynamic", "execution_environment": "adas-si-external-data", "idempotency": "safe"
+    },
+    {
+      "id": "adas.si.search", "family": "adas_si", "family_label": "ADAS SI", "family_description": "Authoritative ADAS service information and managed records.",
+      "description": "Search actual authorized ADAS SI PDFs, broaden candidate sources, and return page-level evidence excerpts.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]}, "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]},
+      "arguments_schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string", "minLength": 2, "maxLength": 500}}, "additionalProperties": false}, "result_schema": {"type": "object"}, "timeout_seconds": 90, "health": "dynamic", "execution_environment": "adas-si-pdf-cache", "idempotency": "safe"
+    },
+    {
+      "id": "adas.si.record.write", "family": "adas_si", "family_label": "ADAS SI", "family_description": "Authoritative ADAS service information and managed records.",
+      "description": "Create a managed ADAS annotation record without modifying OEM originals.",
+      "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]}, "supported_scopes": ["write"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write"], "user": ["write"]},
+      "arguments_schema": {"type": "object", "required": ["record_id", "title", "content"], "properties": {"record_id": {"type": "string"}, "title": {"type": "string"}, "content": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "adas-si-managed-records", "idempotency": "fail-if-exists"
+    },
+    {
+      "id": "adas.si.record.modify", "family": "adas_si", "family_label": "ADAS SI", "family_description": "Authoritative ADAS service information and managed records.",
+      "description": "Version-check and modify a managed ADAS record; OEM source evidence is immutable.",
+      "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]}, "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]},
+      "arguments_schema": {"type": "object", "required": ["record_id", "expected_version"], "properties": {"record_id": {"type": "string"}, "expected_version": {"type": "integer", "minimum": 1}, "title": {"type": "string"}, "content": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "adas-si-managed-records", "idempotency": "optimistic-version"
+    },
+    {
+      "id": "calibration_iq.repair_orders.write", "family": "calibration_iq", "family_label": "Calibration IQ", "family_description": "Independent repair-order workflow service.",
+      "description": "Apply a safe supported update_ro write through the Calibration IQ mutation API with version and idempotency proof.",
+      "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]}, "supported_scopes": ["write"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write"]},
+      "arguments_schema": {"type": "object", "required": ["repair_order_id", "operation", "arguments", "expected_version", "idempotency_key"], "properties": {"repair_order_id": {"type": "string"}, "operation": {"const": "update_ro"}, "arguments": {"type": "object"}, "expected_version": {"type": "integer", "minimum": 1}, "idempotency_key": {"type": "string", "minLength": 16}, "correlation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"}, "timeout_seconds": 30, "health": "dynamic", "execution_environment": "calibration-iq-authenticated-api", "idempotency": "required-upstream-key"
+    },
+    {
+      "id": "calibration_iq.repair_orders.modify", "family": "calibration_iq", "family_label": "Calibration IQ", "family_description": "Independent repair-order workflow service.",
+      "description": "Modify an existing supported repair-order field, status, blocker, or requirement with verified exactly-once receipt.",
+      "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]}, "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"]},
+      "arguments_schema": {"type": "object", "required": ["repair_order_id", "operation", "arguments", "expected_version", "idempotency_key"], "properties": {"repair_order_id": {"type": "string"}, "operation": {"type": "string", "enum": ["change_status", "update_ro", "update_blocker", "update_requirement"]}, "arguments": {"type": "object"}, "expected_version": {"type": "integer", "minimum": 1}, "idempotency_key": {"type": "string", "minLength": 16}, "correlation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"}, "timeout_seconds": 30, "health": "dynamic", "execution_environment": "calibration-iq-authenticated-api", "idempotency": "required-upstream-key"
     },
     {
       "id": "project.list", "family": "projects",
@@ -54,7 +114,7 @@
       "description": "Register and activate an optional user-scoped project reference after the user asks to register, attach, or track one. This never scans or executes the path.",
       "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
       "arguments_schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "reference": {"type": "string"}, "description": {"type": "string"}}, "additionalProperties": false},
-      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available",
+      "result_schema": {"type": "object"}, "supported_scopes": ["write"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write"], "user": ["write"]}, "timeout_seconds": 5, "health": "available",
       "execution_environment": "xv12-backend", "idempotency": "user-requested-write"
     },
     {
@@ -62,7 +122,7 @@
       "description": "Attach one of the authenticated user's registered projects as active context. Requires its exact project id from project.list or project.register.",
       "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
       "arguments_schema": {"type": "object", "required": ["project_id"], "properties": {"project_id": {"type": "string"}}, "additionalProperties": false},
-      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available",
+      "result_schema": {"type": "object"}, "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]}, "timeout_seconds": 5, "health": "available",
       "execution_environment": "xv12-backend", "idempotency": "safe"
     },
     {
@@ -70,7 +130,7 @@
       "description": "Detach the authenticated user's active project from conversational context without deleting it. You must call this whenever the user asks to close, detach, clear, or stop using the active project.",
       "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
       "arguments_schema": {"type": "object", "properties": {}, "additionalProperties": false},
-      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available",
+      "result_schema": {"type": "object"}, "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]}, "timeout_seconds": 5, "health": "available",
       "execution_environment": "xv12-backend", "idempotency": "safe"
     },
     {
@@ -78,7 +138,7 @@
       "description": "Start the one allowlisted offline Calibration IQ Docker Compose service, then verify health. Use only when Otis explicitly asks to start it; this cannot run arbitrary commands or paths.",
       "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]},
       "arguments_schema": {"type": "object", "properties": {}, "additionalProperties": false},
-      "result_schema": {"type": "object"}, "timeout_seconds": 180, "health": "available",
+      "result_schema": {"type": "object"}, "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"]}, "timeout_seconds": 180, "health": "available",
       "execution_environment": "fixed-calibration-iq-launcher", "idempotency": "safe"
     },
     {
@@ -94,7 +154,7 @@
       "description": "Update the authenticated user's XODUZ spoken-output settings. Call this when the user asks to mute or unmute X, set voice volume, or change the voice. Supply only requested fields; mute never changes saved volume.",
       "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
       "arguments_schema": {"type": "object", "properties": {"voice_name": {"type": "string", "minLength": 1, "maxLength": 120}, "voice_volume": {"type": "integer", "minimum": 0, "maximum": 100}, "voice_muted": {"type": "boolean"}}, "additionalProperties": false},
-      "result_schema": {"type": "object"}, "timeout_seconds": 5, "health": "available",
+      "result_schema": {"type": "object"}, "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]}, "timeout_seconds": 5, "health": "available",
       "execution_environment": "xv12-user-settings", "idempotency": "user-requested-write"
     },
     {

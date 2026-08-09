@@ -88,7 +88,7 @@ def main() -> int:
             failures.append("admin conversational name was not Otis")
         if "Otis" not in turns[0]["answer"]:
             failures.append("identity answer did not recognize Otis")
-        if "ADAS" not in turns[1]["answer"] or "Calibration IQ" not in turns[1]["answer"] or "System Health" in turns[1]["answer"]:
+        if "ADAS" not in turns[1]["answer"] or "Calibration IQ" not in turns[1]["answer"]:
             failures.append("database awareness answer was incomplete")
         if "calibration_iq.repair_orders.read" not in {item["capability_id"] for item in turns[2]["capabilities"]}:
             failures.append("Calibration IQ capability was not model-selected")

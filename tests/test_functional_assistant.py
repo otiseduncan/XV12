@@ -59,7 +59,7 @@ def test_service_start_is_admin_only_and_fixed_in_registry(client):
 def test_adas_adapter_returns_only_verified_owned_data(client):
     login(client)
     coverage = client.post("/api/capabilities/adas.coverage.read", json={"arguments": {}}).json()["result"]
-    assert coverage["status"] == "verified"
+    assert coverage["status"] == "success" and coverage["domain_status"] == "verified"
     assert coverage["coverage"]["documents"] == 76
     assert coverage["coverage"]["verified_records"] == 6
     assert coverage["applications"][0]["make"] == "Hyundai"
@@ -67,7 +67,7 @@ def test_adas_adapter_returns_only_verified_owned_data(client):
         "/api/capabilities/adas.knowledge.search",
         json={"arguments": {"query": "2023 Hyundai Palisade front camera windshield replacement"}},
     ).json()["result"]
-    assert result["status"] == "verified"
+    assert result["status"] == "success" and result["domain_status"] == "verified"
     assert result["results"][0]["procedure"]["title"] == "Front Camera Adjustment (SPTAC or SPC)"
     assert result["evidence"]["verified_only"] is True
     miss = client.post(

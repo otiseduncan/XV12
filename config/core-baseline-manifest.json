@@ -1,0 +1,73 @@
+{
+  "manifest_version": "1.0.0",
+  "baseline": {
+    "tag": "xv12-core-frozen-v1",
+    "git_sha": "1b94bbdd58afb973456f78a6a7bc412906caf13e",
+    "timestamp": "2026-08-09T07:31:11.0376565-04:00"
+  },
+  "model": {
+    "filename": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+    "repository_relative_path": "models/qwen3-coder-30b-a3b/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+    "size_bytes": 18556689568,
+    "sha256": "fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad",
+    "quantization": "Q4_K_M"
+  },
+  "llama_cpp": {
+    "repository_relative_path": "runtime/llama.cpp/llama-server.exe",
+    "version": "9906 (33ca0dcb9)",
+    "size_bytes": 9216,
+    "sha256": "5e20cae92cdf2721d37b1d5722c4f9463e11dc643f747f72912cd83971015ec8"
+  },
+  "runtime_contract": {
+    "alias": "xoduz-qwen3-coder-30b",
+    "context_tokens": 32768,
+    "max_response_tokens": 768,
+    "temperature": 0.35,
+    "gpu_layers": 99,
+    "parallel": 1,
+    "arguments": ["-m", "models/qwen3-coder-30b-a3b/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf", "--alias", "xoduz-qwen3-coder-30b", "--host", "127.0.0.1", "--port", "8121", "-c", "32768", "-ngl", "99", "--parallel", "1", "--no-webui"]
+  },
+  "identity_contract": {
+    "version": "xoduz-identity-v1",
+    "sha256": "db78f405bd11158bce0de9eaade15883579e64df379b21536896fdd0c12eab1c"
+  },
+  "protected_core": {
+    "files": {
+      "app/assistant.py": "4334c88928e049622d75796c487a879231db5e677beb71565e7f24896badf80d",
+      "app/model.py": "992e70dd85c28b8b60eb3c16e6c5a511bd1e639de740b199f44c82be65021e6d",
+      "app/context.py": "39d306ba12a292377ed7a3a23bc21529a7269cb296bddbf69c30097160299233",
+      "app/auth.py": "fae2cc2d820bc577581a5b169aa04795ff9ab9e5d4b05ee40db84a1bc2a83b16",
+      "app/database.py": "0049b82b5cd39f63e51ee8eb68213e47e4a010010bc8c3df9109383c02357fc9"
+    },
+    "main_stream_chat_sha256": "220da87b99f632503ab67ff057f70aff71c33febdfa21abcb10bcc67f5b2ded0",
+    "registry_interface_signatures": {
+      "list_for": "(self, user: 'dict[str, Any]') -> 'list[dict[str, Any]]'",
+      "model_tools": "(self, user: 'dict[str, Any]') -> 'list[dict[str, Any]]'",
+      "register": "(self, capability_id: 'str', handler: 'Callable[[dict[str, Any]], Any]') -> 'None'",
+      "execute": "(self, capability_id: 'str', user: 'dict[str, Any]', arguments: 'dict[str, Any]') -> 'tuple[Any, AuthorizationDecision]'"
+    }
+  },
+  "versions": {
+    "database_schema": 3,
+    "capability_registry": "2.1.0",
+    "launcher": "ae7ca83fd5259eebbe8b941b3b99e045a4b6d4fb6eda42ed26584f2be98c83b4",
+    "backend_python": "3.14.0",
+    "frontend": "native-html-css-javascript"
+  },
+  "acceptance": {
+    "result": "PASS",
+    "focused_packs": ["chat-core", "auth", "memory-isolation", "context", "model-runtime", "user-identity", "registry-gateway"],
+    "production_turns": 4,
+    "persisted_messages": 8,
+    "first_token_seconds": {"minimum": 0.309, "maximum": 0.577},
+    "service_ports": {"backend": 8120, "model": 8121},
+    "standalone_audit": "PASS"
+  },
+  "backup": {
+    "path": "X:\\XV12 Backups\\xv12-core-frozen-v1-1b94bbd",
+    "result": "PASS",
+    "file_count": 3417,
+    "total_bytes": 19948074438,
+    "manifest_sha256": "bfecc29403f9e3c8ca018e9fb41e5c098b89c1e5e03cf098f1ecb43822cea0e7"
+  }
+}

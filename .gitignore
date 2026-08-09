@@ -16,6 +16,8 @@ data/*.db-*
 data/**/*.sqlite
 data/**/*.sqlite-*
 data/attachments/
+data/capabilities/
+evidence/adas-audi-a5/
 models/**/*.gguf
 runtime/llama.cpp/*
 !runtime/llama.cpp/VERSION.txt

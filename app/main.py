@@ -20,11 +20,15 @@ from pydantic import BaseModel, Field
 
 from .auth import create_auth_router, current_user
 from .assistant import AssistantOrchestrator
+from .capabilities.adas_si import AdasSICapability
+from .capabilities.calibration_iq import CalibrationIQCapability
+from .capabilities.files import LocalFilesCapability
 from .config import Settings
 from .context import ContextAssembler
 from .data_tools import adas_coverage, adas_search, calibration_iq_health, calibration_iq_read, start_calibration_iq
 from .database import UserScopedStore, utcnow
 from .model import LlamaModel
+from .permissions import CapabilityPermissionStore, create_permission_router
 from .registry import CapabilityDenied, CapabilityGateway, CapabilityRegistry
 from .web_tools import current_search
 
@@ -92,8 +96,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     store = UserScopedStore(settings.database_path, settings.owner_google_sub)
     store.initialize()
     settings.attachments_path.mkdir(parents=True, exist_ok=True)
-    registry = CapabilityRegistry(settings.root / "config" / "capabilities.v1.json")
+    capability_data = settings.root / "data" / "capabilities" if settings.root in settings.database_path.resolve().parents else settings.database_path.parent / "capabilities"
+    permission_store = CapabilityPermissionStore(capability_data / "permissions.sqlite", settings.database_path)
+    permission_store.initialize()
+    registry = CapabilityRegistry(settings.root / "config" / "capabilities.v1.json", permission_store)
     gateway = CapabilityGateway(registry)
+    files_capability = LocalFilesCapability(
+        [settings.root, Path(r"X:\ADAS SI"), settings.calibration_iq_project_path],
+        capability_data / "files",
+    )
+    adas_si_capability = AdasSICapability(Path(r"X:\ADAS SI"), capability_data / "adas_si" / "index.sqlite")
+    calibration_iq_capability = CalibrationIQCapability(settings)
     model = LlamaModel(settings)
     context = ContextAssembler(store, settings.model_context_tokens)
     turn_logger = _configure_logging(settings)
@@ -109,8 +122,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.context = context
     app.state.registry = registry
     app.state.gateway = gateway
+    app.state.permission_store = permission_store
     app.state.turn_logger = turn_logger
     app.include_router(create_auth_router(settings))
+    app.include_router(create_permission_router(permission_store))
 
     async def health_document() -> dict[str, Any]:
         model_health = await app.state.model.health()
@@ -142,7 +157,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     gateway.register("web.current.search", lambda arguments: current_search(arguments, settings.web_timeout_seconds))
     gateway.register("adas.coverage.read", lambda arguments: adas_coverage(settings, arguments))
     gateway.register("adas.knowledge.search", lambda arguments: adas_search(settings, arguments))
-    gateway.register("calibration_iq.repair_orders.read", lambda arguments: calibration_iq_read(settings, arguments))
+    gateway.register("files.local.read", files_capability.read)
+    gateway.register("files.local.write", files_capability.write)
+    gateway.register("files.local.modify", files_capability.modify)
+    gateway.register("adas.si.inventory.read", adas_si_capability.inventory)
+    gateway.register("adas.si.search", adas_si_capability.search)
+    gateway.register("adas.si.record.write", adas_si_capability.write)
+    gateway.register("adas.si.record.modify", adas_si_capability.modify)
+    gateway.register("calibration_iq.repair_orders.read", calibration_iq_capability.read)
+    gateway.register("calibration_iq.repair_orders.write", calibration_iq_capability.write)
+    gateway.register("calibration_iq.repair_orders.modify", calibration_iq_capability.modify)
     gateway.register("project.list", lambda _arguments, user: {"status": "verified", "projects": store.list_projects(user["id"])})
 
     def register_project_capability(arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
@@ -410,8 +434,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         capabilities = [dict(item) for item in registry.list_for(user)]
         calibration_health = await calibration_iq_health(settings)
         for item in capabilities:
-            if item["id"] == "calibration_iq.repair_orders.read":
+            if item["id"].startswith("calibration_iq."):
                 item["health"] = calibration_health["status"]
+            elif item["id"].startswith("adas.si."):
+                item["health"] = "available" if Path(r"X:\ADAS SI").is_dir() else "offline"
             elif item["id"].startswith("adas."):
                 item["health"] = "available" if (settings.adas_database_path or settings.root / "data/knowledge/adas_knowledge.sqlite").exists() else "offline"
         return {"registry_version": registry.version, "capabilities": capabilities}

@@ -70,7 +70,7 @@ def test_conversational_voice_capability_uses_authoritative_settings(client):
         "/api/capabilities/settings.voice.update",
         json={"arguments": {"voice_volume": 40, "voice_muted": True}},
     ).json()["result"]
-    assert result["status"] == "updated"
+    assert result["status"] == "success" and result["domain_status"] == "updated"
     assert result["settings"]["voice_volume"] == 40
     assert result["settings"]["voice_muted"] is True
     assert client.get("/api/settings/voice").json() == result["settings"]

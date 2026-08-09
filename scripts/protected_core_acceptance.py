@@ -19,7 +19,7 @@ PROMPTS = [
 def run() -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "result": "FAIL",
-        "protected_sha": "2cbaafd70eaea1c752decda79d574db293e64691",
+        "protected_sha": "1b94bbdd58afb973456f78a6a7bc412906caf13e",
         "turns": [],
     }
     with httpx.Client(base_url=BASE_URL, timeout=httpx.Timeout(15, read=300)) as client:

@@ -12,12 +12,12 @@ from .conftest import login
 
 @pytest.mark.registry_gateway
 def test_registry_is_versioned_and_gateway_executes_registered_tier_zero(client):
-    login(client, "user-a")
+    login(client, "admin")
     listing = client.get("/api/capabilities").json()
-    assert listing["registry_version"] == "2.1.0"
+    assert listing["registry_version"] == "3.0.0"
     ids = {item["id"] for item in listing["capabilities"]}
     assert {"system.health.read", "web.current.search", "adas.coverage.read", "project.list", "settings.voice.read", "settings.voice.update"} <= ids
-    assert "service.calibration_iq.start" not in ids
+    assert "service.calibration_iq.start" in ids
     result = client.post("/api/capabilities/system.health.read", json={"arguments": {}})
     assert result.status_code == 200
     assert result.json()["authorization"]["allowed"] is True
