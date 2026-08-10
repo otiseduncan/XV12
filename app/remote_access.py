@@ -16,7 +16,13 @@ from pydantic import BaseModel, Field
 
 from .auth import current_user
 from .config import Settings
-from .enrollment import EnrollmentDenied, EnrollmentStore, ONBOARDING_COOKIE
+from .enrollment import (
+    EnrollmentDenied,
+    EnrollmentStore,
+    ONBOARDING_COOKIE,
+    OWNER_BOOTSTRAP_COOKIE,
+    OwnerBootstrapDenied,
+)
 
 
 class InitialGrant(BaseModel):
@@ -127,6 +133,35 @@ def _qr_data_url(value: str) -> str:
 def create_remote_access_router(settings: Settings) -> APIRouter:
     router = APIRouter(tags=["private-onboarding"])
     tailscale = TailscaleInvites(settings)
+
+    @router.get("/owner-bootstrap/{token}", include_in_schema=False)
+    def open_owner_bootstrap(token: str, request: Request) -> RedirectResponse:
+        store: EnrollmentStore = request.app.state.store
+        try:
+            handle = store.create_owner_bootstrap_handoff(token)
+        except OwnerBootstrapDenied as error:
+            raise HTTPException(status_code=410, detail=str(error)) from error
+        response = RedirectResponse("/api/auth/google/start", status_code=303)
+        response.set_cookie(
+            OWNER_BOOTSTRAP_COOKIE,
+            handle,
+            max_age=15 * 60,
+            httponly=True,
+            secure=settings.cookie_secure,
+            samesite="lax",
+            path="/",
+        )
+        response.delete_cookie(ONBOARDING_COOKIE, path="/")
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @router.get("/owner-bootstrap-failed", include_in_schema=False)
+    def owner_bootstrap_error() -> HTMLResponse:
+        return _page(
+            "Owner bootstrap unavailable",
+            "<p>The one-time Owner bootstrap is invalid, expired, already consumed, or the Owner identity is no longer in a safe placeholder state.</p>",
+        )
 
     @router.get("/onboard/{token}", include_in_schema=False)
     def open_invitation(token: str, request: Request) -> RedirectResponse:

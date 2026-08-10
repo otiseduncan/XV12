@@ -1,6 +1,6 @@
 param(
     [ValidateRange(1, 65535)][int]$FrontendPort = 8120,
-    [ValidateSet(443, 8443, 10000)][int]$ServeHttpsPort = 10000,
+    [ValidateSet(443, 8443, 10000)][int]$ServeHttpsPort = 8443,
     [switch]$ValidateOnly,
     [switch]$NoStart
 )

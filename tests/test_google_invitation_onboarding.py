@@ -7,11 +7,12 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 import app.auth as auth_module
 import app.remote_access as remote_module
-from app.enrollment import EnrollmentDenied, _oidc_invitation_id
+from app.enrollment import EnrollmentDenied, OwnerBootstrapDenied, _oidc_invitation_id
 from app.main import create_app
 from tests.conftest import FakeModel, make_settings
 
@@ -93,6 +94,48 @@ def test_unknown_google_identity_cannot_auto_provision(tmp_path, monkeypatch):
         assert response.status_code == 303
         assert response.headers["location"] == "/onboarding/error"
         assert app.state.store.list_enrollment_users() == [next(user for user in app.state.store.list_enrollment_users() if user["role"] == "admin")]
+
+
+def test_one_time_owner_bootstrap_binds_verified_google_sub_and_disables_itself(tmp_path, monkeypatch):
+    app = google_app(tmp_path)
+    private_env = tmp_path / ".env.local"
+    private_env.write_text(
+        "XV12_AUTH_MODE=google\nXV12_OWNER_GOOGLE_SUB=test-admin-sub\nXV12_GOOGLE_CLIENT_SECRET=preserved-secret\n",
+        encoding="utf-8",
+    )
+    app.state.store.owner_env_path = private_env
+    bootstrap_id, token = app.state.store.issue_owner_bootstrap(expires_minutes=10)
+
+    with TestClient(app, base_url=ORIGIN, follow_redirects=False) as owner:
+        opened = owner.get(f"/owner-bootstrap/{token}")
+        assert opened.status_code == 303
+        assert opened.headers["location"] == "/api/auth/google/start"
+        assert token not in opened.headers["location"]
+        assert "xv12_owner_bootstrap" in owner.cookies
+        callback = google_callback(
+            owner,
+            monkeypatch,
+            {"sub": "verified-owner-google-sub", "email": "owner@example.com", "email_verified": True, "name": "Verified Owner"},
+        )
+        assert callback.status_code == 303 and callback.headers["location"] == "/"
+        assert "xv12_owner_bootstrap" not in owner.cookies
+        me = owner.get("/api/auth/me")
+        assert me.status_code == 200
+        assert me.json()["role"] == "admin"
+
+    assert app.state.settings.owner_google_sub == "verified-owner-google-sub"
+    assert app.state.store.owner_google_sub == "verified-owner-google-sub"
+    assert "XV12_OWNER_GOOGLE_SUB=verified-owner-google-sub" in private_env.read_text(encoding="utf-8")
+    assert "XV12_GOOGLE_CLIENT_SECRET=preserved-secret" in private_env.read_text(encoding="utf-8")
+    with app.state.store.connect() as db:
+        bootstrap = db.execute("SELECT status FROM owner_bootstraps WHERE id=?", (bootstrap_id,)).fetchone()
+        admin = db.execute("SELECT google_sub FROM users WHERE role='admin'").fetchone()
+    assert bootstrap["status"] == "consumed"
+    assert admin["google_sub"] == "verified-owner-google-sub"
+    with pytest.raises(OwnerBootstrapDenied):
+        app.state.store.issue_owner_bootstrap()
+    with TestClient(app, base_url=ORIGIN, follow_redirects=False) as replay:
+        assert replay.get(f"/owner-bootstrap/{token}").status_code == 410
 
 
 def test_invitation_token_is_stripped_before_google_redirect(tmp_path):

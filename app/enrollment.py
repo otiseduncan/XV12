@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 import sqlite3
 import uuid
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -19,8 +21,12 @@ from .registry import AuthorizationDecision, CapabilityRegistry
 
 
 ONBOARDING_COOKIE = "xv12_onboarding"
+OWNER_BOOTSTRAP_COOKIE = "xv12_owner_bootstrap"
+OWNER_BOOTSTRAP_PLACEHOLDERS = {"test-admin-sub", "placeholder", "replace-me", "owner-google-sub"}
 _onboarding_handle: ContextVar[str | None] = ContextVar("xv12_onboarding_handle", default=None)
 _oidc_invitation_id: ContextVar[str | None] = ContextVar("xv12_oidc_invitation_id", default=None)
+_owner_bootstrap_handle: ContextVar[str | None] = ContextVar("xv12_owner_bootstrap_handle", default=None)
+_owner_bootstrap_id: ContextVar[str | None] = ContextVar("xv12_owner_bootstrap_id", default=None)
 
 
 def secret_hash(value: str) -> str:
@@ -37,14 +43,26 @@ class EnrollmentDenied(Exception):
     pass
 
 
+class OwnerBootstrapDenied(Exception):
+    pass
+
+
 class EnrollmentMiddleware(BaseHTTPMiddleware):
     """Carries a server-side invitation handoff through the existing Google OIDC router."""
 
     async def dispatch(self, request, call_next):
         handle_token = _onboarding_handle.set(request.cookies.get(ONBOARDING_COOKIE))
         invitation_token = _oidc_invitation_id.set(None)
+        owner_handle_token = _owner_bootstrap_handle.set(request.cookies.get(OWNER_BOOTSTRAP_COOKIE))
+        owner_bootstrap_token = _owner_bootstrap_id.set(None)
         try:
-            return await call_next(request)
+            response = await call_next(request)
+            if _owner_bootstrap_id.get() or (
+                request.url.path == "/api/auth/google/callback"
+                and request.cookies.get(OWNER_BOOTSTRAP_COOKIE)
+            ):
+                response.delete_cookie(OWNER_BOOTSTRAP_COOKIE, path="/")
+            return response
         except EnrollmentPending as error:
             response = RedirectResponse(f"/onboarding/pending?invitation={error.invitation_id}", status_code=303)
             response.delete_cookie(SESSION_COOKIE, path="/")
@@ -55,7 +73,14 @@ class EnrollmentMiddleware(BaseHTTPMiddleware):
             response.delete_cookie(SESSION_COOKIE, path="/")
             response.delete_cookie(ONBOARDING_COOKIE, path="/")
             return response
+        except OwnerBootstrapDenied:
+            response = RedirectResponse("/owner-bootstrap-failed", status_code=303)
+            response.delete_cookie(SESSION_COOKIE, path="/")
+            response.delete_cookie(OWNER_BOOTSTRAP_COOKIE, path="/")
+            return response
         finally:
+            _owner_bootstrap_id.reset(owner_bootstrap_token)
+            _owner_bootstrap_handle.reset(owner_handle_token)
             _oidc_invitation_id.reset(invitation_token)
             _onboarding_handle.reset(handle_token)
 
@@ -126,6 +151,7 @@ class EnrollmentStore(UserScopedStore):
         super().__init__(path, owner_google_sub)
         self.settings = settings
         self.permission_store = None
+        self.owner_env_path = settings.root / "config" / ".env.local"
 
     def initialize(self) -> None:
         super().initialize()
@@ -182,6 +208,29 @@ class EnrollmentStore(UserScopedStore):
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS enrollment_audit_created ON enrollment_audit(created_at DESC);
+                CREATE TABLE IF NOT EXISTS owner_bootstraps (
+                    id TEXT PRIMARY KEY,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL CHECK(status IN ('active','consumed','revoked','expired')),
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    consumed_at TEXT,
+                    verified_google_sub TEXT
+                );
+                CREATE TABLE IF NOT EXISTS owner_bootstrap_handoffs (
+                    handle_hash TEXT PRIMARY KEY,
+                    bootstrap_id TEXT NOT NULL REFERENCES owner_bootstraps(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS owner_bootstrap_oidc_links (
+                    state_hash TEXT PRIMARY KEY,
+                    bootstrap_id TEXT NOT NULL REFERENCES owner_bootstraps(id),
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT
+                );
                 DROP INDEX IF EXISTS enrollment_claimed_google_sub;
                 """
             )
@@ -298,6 +347,116 @@ class EnrollmentStore(UserScopedStore):
             user["invitation_enrolled"] = self.is_enrolled_user(user["id"])
         return user
 
+    def issue_owner_bootstrap(self, expires_minutes: int = 10) -> tuple[str, str]:
+        now = datetime.now(UTC)
+        owner_sub = self.settings.owner_google_sub.strip()
+        if owner_sub not in OWNER_BOOTSTRAP_PLACEHOLDERS:
+            raise OwnerBootstrapDenied("The Owner is already bound to a non-placeholder Google identity")
+        token = secrets.token_urlsafe(48)
+        bootstrap_id = str(uuid.uuid4())
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            admins = db.execute("SELECT id,google_sub FROM users WHERE role='admin' AND status='active'").fetchall()
+            if len(admins) != 1 or admins[0]["google_sub"] != owner_sub:
+                raise OwnerBootstrapDenied("Owner bootstrap requires exactly one placeholder-bound active administrator")
+            db.execute("UPDATE owner_bootstraps SET status='expired' WHERE status='active' AND expires_at<=?", (now.isoformat(),))
+            db.execute("UPDATE owner_bootstraps SET status='revoked' WHERE status='active'")
+            db.execute(
+                "INSERT INTO owner_bootstraps(id,token_hash,status,created_at,expires_at) VALUES(?,?,'active',?,?)",
+                (bootstrap_id, secret_hash(token), now.isoformat(), (now + timedelta(minutes=max(2, min(expires_minutes, 30)))).isoformat()),
+            )
+            self._audit(db, "owner_bootstrap.issued", subject_user_id=admins[0]["id"])
+        return bootstrap_id, token
+
+    def create_owner_bootstrap_handoff(self, token: str) -> str:
+        now = datetime.now(UTC)
+        handle = secrets.token_urlsafe(40)
+        with self.connect() as db:
+            db.execute("UPDATE owner_bootstraps SET status='expired' WHERE status='active' AND expires_at<=?", (now.isoformat(),))
+            row = db.execute(
+                "SELECT id,expires_at FROM owner_bootstraps WHERE token_hash=? AND status='active' AND expires_at>?",
+                (secret_hash(token), now.isoformat()),
+            ).fetchone()
+            if not row:
+                raise OwnerBootstrapDenied("Owner bootstrap is invalid, expired, or already consumed")
+            db.execute(
+                "INSERT INTO owner_bootstrap_handoffs(handle_hash,bootstrap_id,created_at,expires_at) VALUES(?,?,?,?)",
+                (secret_hash(handle), row["id"], now.isoformat(), min(datetime.fromisoformat(row["expires_at"]), now + timedelta(minutes=15)).isoformat()),
+            )
+            self._audit(db, "owner_bootstrap.opened")
+        return handle
+
+    @staticmethod
+    def _persist_owner_sub(path: Path, google_sub: str) -> None:
+        if not path.is_file():
+            raise OwnerBootstrapDenied("Private XV12 configuration is unavailable")
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+        replacement = f"XV12_OWNER_GOOGLE_SUB={google_sub}"
+        updated: list[str] = []
+        replaced = False
+        for line in lines:
+            if line.strip() and not line.lstrip().startswith("#") and line.partition("=")[0].strip() == "XV12_OWNER_GOOGLE_SUB":
+                if not replaced:
+                    updated.append(replacement)
+                    replaced = True
+                continue
+            updated.append(line)
+        if not replaced:
+            updated.append(replacement)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text("\n".join(updated) + "\n", encoding="utf-8")
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _claim_owner_bootstrap(self, bootstrap_id: str, *, google_sub: str, email: str, email_verified: bool, display_name: str) -> dict[str, Any]:
+        if not email_verified:
+            raise OwnerBootstrapDenied("A verified Google identity is required")
+        now = utcnow()
+        original_env = self.owner_env_path.read_bytes() if self.owner_env_path.is_file() else None
+        try:
+            with self.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                bootstrap = db.execute(
+                    "SELECT * FROM owner_bootstraps WHERE id=? AND status='active' AND expires_at>?",
+                    (bootstrap_id, now),
+                ).fetchone()
+                owner_sub = self.settings.owner_google_sub.strip()
+                admins = db.execute("SELECT * FROM users WHERE role='admin' AND status='active'").fetchall()
+                collision = db.execute("SELECT id FROM users WHERE google_sub=?", (google_sub,)).fetchone()
+                if not bootstrap or owner_sub not in OWNER_BOOTSTRAP_PLACEHOLDERS:
+                    raise OwnerBootstrapDenied("Owner bootstrap is unavailable")
+                if len(admins) != 1 or admins[0]["google_sub"] != owner_sub:
+                    raise OwnerBootstrapDenied("Owner identity state is not safe to bootstrap")
+                if collision and collision["id"] != admins[0]["id"]:
+                    raise OwnerBootstrapDenied("The verified Google identity is already bound to another account")
+                db.execute(
+                    "UPDATE users SET google_sub=?,email=?,email_verified=?,display_name=?,last_login_at=? WHERE id=?",
+                    (google_sub, email, int(email_verified), display_name, now, admins[0]["id"]),
+                )
+                changed = db.execute(
+                    "UPDATE owner_bootstraps SET status='consumed',consumed_at=?,verified_google_sub=? WHERE id=? AND status='active'",
+                    (now, google_sub, bootstrap_id),
+                )
+                if changed.rowcount != 1:
+                    raise OwnerBootstrapDenied("Owner bootstrap was already consumed")
+                self._audit(db, "owner_bootstrap.consumed", subject_user_id=admins[0]["id"])
+                row = db.execute("SELECT * FROM users WHERE id=?", (admins[0]["id"],)).fetchone()
+                self._persist_owner_sub(self.owner_env_path, google_sub)
+        except Exception:
+            if original_env is not None:
+                temporary = self.owner_env_path.with_name(f".{self.owner_env_path.name}.{uuid.uuid4().hex}.tmp")
+                try:
+                    temporary.write_bytes(original_env)
+                    os.replace(temporary, self.owner_env_path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            raise
+        self.settings.owner_google_sub = google_sub
+        self.owner_google_sub = google_sub
+        return dict(row)
+
     def create_handoff(self, token: str) -> tuple[str, dict[str, Any]]:
         now = datetime.now(UTC)
         handle = secrets.token_urlsafe(40)
@@ -347,6 +506,26 @@ class EnrollmentStore(UserScopedStore):
                         (secret_hash(state), handoff["invitation_id"], now.isoformat(), (now + timedelta(minutes=10)).isoformat()),
                     )
                     db.execute("UPDATE enrollment_handoffs SET used_at=? WHERE handle_hash=?", (now.isoformat(), secret_hash(handle)))
+        owner_handle = _owner_bootstrap_handle.get()
+        if owner_handle:
+            now = datetime.now(UTC)
+            with self.connect() as db:
+                handoff = db.execute(
+                    """SELECT h.bootstrap_id FROM owner_bootstrap_handoffs h
+                       JOIN owner_bootstraps b ON b.id=h.bootstrap_id
+                       WHERE h.handle_hash=? AND h.used_at IS NULL AND h.expires_at>?
+                         AND b.status='active' AND b.expires_at>?""",
+                    (secret_hash(owner_handle), now.isoformat(), now.isoformat()),
+                ).fetchone()
+                if handoff:
+                    db.execute(
+                        "INSERT INTO owner_bootstrap_oidc_links(state_hash,bootstrap_id,created_at,expires_at) VALUES(?,?,?,?)",
+                        (secret_hash(state), handoff["bootstrap_id"], now.isoformat(), (now + timedelta(minutes=10)).isoformat()),
+                    )
+                    db.execute(
+                        "UPDATE owner_bootstrap_handoffs SET used_at=? WHERE handle_hash=?",
+                        (now.isoformat(), secret_hash(owner_handle)),
+                    )
         return state, nonce
 
     def consume_oidc_attempt(self, state: str) -> str | None:
@@ -361,11 +540,27 @@ class EnrollmentStore(UserScopedStore):
             if row:
                 db.execute("UPDATE enrollment_oidc_links SET used_at=? WHERE state_hash=?", (utcnow(), secret_hash(state)))
                 _oidc_invitation_id.set(str(row["invitation_id"]))
+            owner_row = db.execute(
+                "SELECT bootstrap_id FROM owner_bootstrap_oidc_links WHERE state_hash=? AND used_at IS NULL AND expires_at>?",
+                (secret_hash(state), utcnow()),
+            ).fetchone()
+            if owner_row:
+                db.execute("UPDATE owner_bootstrap_oidc_links SET used_at=? WHERE state_hash=?", (utcnow(), secret_hash(state)))
+                _owner_bootstrap_id.set(str(owner_row["bootstrap_id"]))
         return nonce
 
     def upsert_oidc_user(self, *, google_sub: str, email: str, email_verified: bool, display_name: str) -> dict[str, Any]:
         if self.settings.auth_mode == "test":
             return super().upsert_oidc_user(google_sub=google_sub, email=email, email_verified=email_verified, display_name=display_name)
+        bootstrap_id = _owner_bootstrap_id.get()
+        if bootstrap_id:
+            return self._claim_owner_bootstrap(
+                bootstrap_id,
+                google_sub=google_sub,
+                email=email,
+                email_verified=email_verified,
+                display_name=display_name,
+            )
         invitation_id = _oidc_invitation_id.get()
         now = utcnow()
         with self.connect() as db:

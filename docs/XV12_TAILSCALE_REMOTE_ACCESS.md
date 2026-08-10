@@ -23,11 +23,11 @@ Create untracked `config/.env.local` from `.env.example`. This deployment's non-
 XV12_AUTH_MODE=google
 XV12_GOOGLE_CLIENT_ID=...
 XV12_GOOGLE_CLIENT_SECRET=...
-XV12_GOOGLE_REDIRECT_URI=https://omega.tailce2276.ts.net:10000/api/auth/google/callback
+XV12_GOOGLE_REDIRECT_URI=https://omega.tailce2276.ts.net:8443/api/auth/google/callback
 XV12_OWNER_GOOGLE_SUB=...
 XV12_COOKIE_SECURE=1
 
-XV12_TAILSCALE_SERVE_ORIGIN=https://omega.tailce2276.ts.net:10000
+XV12_TAILSCALE_SERVE_ORIGIN=https://omega.tailce2276.ts.net:8443
 XV12_TAILSCALE_API_TOKEN=...
 XV12_TAILSCALE_TAILNET=tailnet-name.ts.net
 XV12_TAILSCALE_ROLE=member
@@ -42,12 +42,13 @@ The Owner UI presents onboarding as two ordered steps: join the tailnet first, t
 The preserved Serve topology on this host is:
 
 - `https://omega.tailce2276.ts.net:443` → `127.0.0.1:8084` (Calibration IQ)
-- `https://omega.tailce2276.ts.net:8443` → `127.0.0.1:3134` (unrelated existing service)
-- `https://omega.tailce2276.ts.net:10000` → `127.0.0.1:8120` (XV12)
+- `https://omega.tailce2276.ts.net:8443` → `127.0.0.1:8120` (XV12)
 
 Funnel is disabled. XV12 must not reset or replace the other routes.
 
 Register the exact `XV12_GOOGLE_REDIRECT_URI` in the Google OAuth client before testing production sign-in.
+
+If the sole Owner is still bound to a known placeholder subject, run `scripts\start-owner-bootstrap.ps1` locally on Omega. The script opens a private, short-lived, one-time URL without printing it. The normal Google authorization-code flow verifies the identity, atomically replaces only the placeholder Owner subject, updates the ignored private configuration, consumes the bootstrap, and disables further bootstrap issuance. It refuses to run once a real Owner subject is bound.
 
 ## Configure Tailscale Serve
 
