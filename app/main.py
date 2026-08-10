@@ -29,11 +29,11 @@ from .context import ContextAssembler
 from .creator import CreatorPlatform, create_creator_router
 from .data_tools import adas_coverage, adas_search, calibration_iq_health, calibration_iq_read, start_calibration_iq
 from .database import utcnow
-from .enrollment import EnrollmentMiddleware, EnrollmentStore
+from .enrollment import EnrollmentCapabilityRegistry, EnrolledUserAccessMiddleware, EnrollmentMiddleware, EnrollmentStore
 from .model import LlamaModel
 from .model_compat import ToolCallCompatibilityModel
 from .permissions import CapabilityPermissionStore, create_permission_router
-from .registry import CapabilityDenied, CapabilityGateway, CapabilityNotFound, CapabilityRegistry
+from .registry import CapabilityDenied, CapabilityGateway, CapabilityNotFound
 from .web_tools import current_search
 from .remote_access import create_remote_access_router
 
@@ -105,7 +105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     permission_store = CapabilityPermissionStore(capability_data / "permissions.sqlite", settings.database_path)
     permission_store.initialize()
     store.permission_store = permission_store
-    registry = CapabilityRegistry(settings.root / "config" / "capabilities.v1.json", permission_store)
+    registry = EnrollmentCapabilityRegistry(settings.root / "config" / "capabilities.v1.json", permission_store)
     artifact_store = ArtifactStore(
         capability_data / "artifacts.sqlite",
         [settings.root, Path(r"X:\ADAS SI"), settings.calibration_iq_project_path, capability_data / "creator"],
@@ -161,6 +161,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(create_remote_access_router(settings))
     app.add_middleware(ConversationContextMiddleware)
     app.add_middleware(EnrollmentMiddleware)
+    app.add_middleware(EnrolledUserAccessMiddleware)
 
     async def health_document() -> dict[str, Any]:
         model_health = await app.state.model.health()

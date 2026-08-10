@@ -10,11 +10,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse
 
 from .auth import SESSION_COOKIE
 from .config import Settings
 from .database import UserScopedStore, utcnow
+from .registry import AuthorizationDecision, CapabilityRegistry
 
 
 ONBOARDING_COOKIE = "xv12_onboarding"
@@ -57,6 +58,65 @@ class EnrollmentMiddleware(BaseHTTPMiddleware):
         finally:
             _oidc_invitation_id.reset(invitation_token)
             _onboarding_handle.reset(handle_token)
+
+
+class EnrolledUserAccessMiddleware(BaseHTTPMiddleware):
+    """Fail closed on direct privileged APIs for invitation-enrolled users."""
+
+    _allowed_api_prefixes = (
+        "/api/auth/",
+        "/api/conversations",
+        "/api/settings/voice",
+        "/api/capabilities",
+        "/api/onboarding/me",
+    )
+
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        if not path.startswith("/api/") or path == "/api/health":
+            return await call_next(request)
+        token = request.cookies.get(SESSION_COOKIE, "")
+        user = request.app.state.store.get_session_user(token) if token else None
+        if not user or user["role"] == "admin" or not request.app.state.store.is_enrolled_user(user["id"]):
+            return await call_next(request)
+        allowed = any(path == prefix or path.startswith(prefix) for prefix in self._allowed_api_prefixes)
+        if request.method == "GET" and path.startswith("/api/artifacts/"):
+            allowed = True
+        if allowed:
+            return await call_next(request)
+        logger = getattr(request.app.state, "turn_logger", None)
+        if logger:
+            logger.info(json.dumps({"event": "security.enrolled_direct_api_denied", "user_id": user["id"], "path": path}))
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "This direct interface is not available for this account. Authorized capabilities remain available through XODUZ conversation."},
+        )
+
+
+class EnrollmentCapabilityRegistry(CapabilityRegistry):
+    """Applies explicit grants to platform-service capabilities for invited members."""
+
+    def authorize(self, capability_id: str, user: dict[str, Any]) -> AuthorizationDecision:
+        decision = super().authorize(capability_id, user)
+        capability = self.capabilities.get(capability_id, {})
+        if (
+            decision.allowed
+            and capability.get("platform_service")
+            and user.get("invitation_enrolled")
+            and user.get("role") != "admin"
+            and self.permissions is not None
+            and not self.permissions.allows(user["id"], decision.family, decision.scope)
+        ):
+            return AuthorizationDecision(
+                False,
+                capability_id,
+                user["id"],
+                user["role"],
+                "capability_grant_missing",
+                decision.family,
+                decision.scope,
+            )
+        return decision
 
 
 class EnrollmentStore(UserScopedStore):
@@ -189,9 +249,14 @@ class EnrollmentStore(UserScopedStore):
         with self.connect() as db:
             db.execute(
                 "UPDATE enrollment_invitations SET tailscale_status=?,tailscale_invite_id=?,tailscale_invite_url=?,tailscale_error=? WHERE id=?",
-                (status, invite_id or None, invite_url or None, error[:500] or None, invitation_id),
+                (status, invite_id or None, None, error[:500] or None, invitation_id),
             )
-            self._audit(db, f"tailscale_invitation.{status}", invitation_id=invitation_id, detail={"has_invite_id": bool(invite_id), "has_error": bool(error)})
+            self._audit(
+                db,
+                f"tailscale_invitation.{status}",
+                invitation_id=invitation_id,
+                detail={"has_invite_id": bool(invite_id), "invite_url_returned_once": bool(invite_url), "has_error": bool(error)},
+            )
 
     def invitation(self, invitation_id: str) -> dict[str, Any] | None:
         with self.connect() as db:
@@ -221,6 +286,17 @@ class EnrollmentStore(UserScopedStore):
                    ORDER BY CASE u.role WHEN 'admin' THEN 0 ELSE 1 END,u.display_name"""
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def is_enrolled_user(self, user_id: str) -> bool:
+        with self.connect() as db:
+            row = db.execute("SELECT 1 FROM enrollment_invitations WHERE claimed_user_id=? LIMIT 1", (user_id,)).fetchone()
+        return row is not None
+
+    def get_session_user(self, token: str) -> dict[str, Any] | None:
+        user = super().get_session_user(token)
+        if user:
+            user["invitation_enrolled"] = self.is_enrolled_user(user["id"])
+        return user
 
     def create_handoff(self, token: str) -> tuple[str, dict[str, Any]]:
         now = datetime.now(UTC)
@@ -293,6 +369,7 @@ class EnrollmentStore(UserScopedStore):
         invitation_id = _oidc_invitation_id.get()
         now = utcnow()
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             existing = db.execute("SELECT * FROM users WHERE google_sub=?", (google_sub,)).fetchone()
             if existing and (existing["role"] == "admin" or existing["status"] == "active"):
                 pass

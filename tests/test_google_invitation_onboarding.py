@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import io
+import threading
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -8,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import app.auth as auth_module
 import app.remote_access as remote_module
+from app.enrollment import EnrollmentDenied, _oidc_invitation_id
 from app.main import create_app
 from tests.conftest import FakeModel, make_settings
 
@@ -147,6 +151,94 @@ def test_invitation_is_atomic_one_use_for_google_identity(tmp_path, monkeypatch)
     assert [user["google_sub"] for user in users] == ["first-sub"]
 
 
+def test_concurrent_invitation_claim_allows_exactly_one_identity(tmp_path):
+    app = google_app(tmp_path, onboarding_approval_required=False)
+    with owner_client(app) as owner:
+        invitation = create_invite(owner, approval_required=False)
+    invitation_id = invitation["invitation"]["id"]
+    barrier = threading.Barrier(2)
+    results: list[tuple[str, str]] = []
+
+    def claim(suffix: str) -> None:
+        context = _oidc_invitation_id.set(invitation_id)
+        try:
+            barrier.wait(timeout=5)
+            user = app.state.store.upsert_oidc_user(
+                google_sub=f"race-{suffix}",
+                email=f"race-{suffix}@example.com",
+                email_verified=True,
+                display_name=f"Race {suffix}",
+            )
+            results.append(("accepted", user["google_sub"]))
+        except EnrollmentDenied:
+            results.append(("denied", suffix))
+        finally:
+            _oidc_invitation_id.reset(context)
+
+    threads = [threading.Thread(target=claim, args=(suffix,)) for suffix in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert all(not thread.is_alive() for thread in threads)
+    assert [result[0] for result in results].count("accepted") == 1
+    assert [result[0] for result in results].count("denied") == 1
+    claimed = app.state.store.invitation(invitation_id)
+    assert claimed["status"] == "active"
+    assert claimed["claimed_google_sub"] == next(result[1] for result in results if result[0] == "accepted")
+
+
+def test_expired_and_revoked_invitation_links_fail_closed(tmp_path):
+    app = google_app(tmp_path)
+    with owner_client(app) as owner:
+        expired = create_invite(owner)
+        revoked = create_invite(owner)
+        with app.state.store.connect() as db:
+            db.execute(
+                "UPDATE enrollment_invitations SET expires_at=? WHERE id=?",
+                ((datetime.now(UTC) - timedelta(minutes=1)).isoformat(), expired["invitation"]["id"]),
+            )
+        assert owner.post(
+            f"/api/admin/onboarding/invitations/{revoked['invitation']['id']}/revoke",
+            headers=OWNER_HEADERS,
+            json={},
+        ).status_code == 200
+    with TestClient(app, base_url=ORIGIN, follow_redirects=False) as recipient:
+        assert recipient.get(urlparse(expired["invitation_url"]).path).status_code == 410
+        assert recipient.get(urlparse(revoked["invitation_url"]).path).status_code == 410
+
+
+def test_invitation_enrolled_user_is_conversation_only_until_granted(tmp_path, monkeypatch):
+    app = google_app(tmp_path, onboarding_approval_required=False)
+    with owner_client(app) as owner:
+        invitation = create_invite(owner, approval_required=False)
+    with TestClient(app, base_url=ORIGIN, follow_redirects=False) as recipient:
+        begin_invitation(recipient, invitation["invitation_url"])
+        accepted = google_callback(
+            recipient,
+            monkeypatch,
+            {"sub": "bounded-sub", "email": "bounded@example.com", "email_verified": True, "name": "Bounded User"},
+        )
+        assert accepted.status_code == 303 and accepted.headers["location"] == "/"
+        assert recipient.get("/api/onboarding/me").json() == {"invitation_enrolled": True, "conversation_only": True}
+        assert recipient.post("/api/conversations", json={"title": "Allowed chat"}).status_code == 201
+        assert recipient.get("/api/projects").status_code == 403
+        assert recipient.post("/api/attachments", files={"file": ("blocked.txt", io.BytesIO(b"blocked"), "text/plain")}).status_code == 403
+        assert recipient.get("/api/runtime/fingerprint").status_code == 403
+        assert recipient.get("/api/creator/jobs/not-a-job").status_code == 403
+        listing = recipient.get("/api/capabilities").json()["capabilities"]
+        assert listing == []
+        assert recipient.post("/api/capabilities/project.list", json={"arguments": {}}).status_code == 403
+        enrolled = app.state.store.invitation(invitation["invitation"]["id"])
+        with owner_client(app) as owner:
+            granted = owner.put(
+                f"/api/admin/capabilities/users/{enrolled['claimed_user_id']}/grants",
+                json={"grants": [{"family": "projects", "scopes": ["read"]}]},
+            )
+            assert granted.status_code == 200
+        assert recipient.post("/api/capabilities/project.list", json={"arguments": {}}).status_code == 200
+
+
 def test_initial_capability_grants_activate_only_after_approval(tmp_path, monkeypatch):
     app = google_app(tmp_path)
     family = next(item for item in app.state.registry.permission_catalog("user") if item["allowed_scopes"])
@@ -211,6 +303,8 @@ def test_tailscale_invite_api_is_email_less_and_revocable(tmp_path, monkeypatch)
     with owner_client(app) as owner:
         invitation = create_invite(owner)
         assert invitation["tailscale"]["status"] == "created"
+        assert invitation["tailscale_qr_image"].startswith("data:image/svg+xml;base64,")
+        assert invitation["invitation"]["tailscale_invite_url"] is None
         assert requests[0][2] == {"role": "member"}
         invitation_id = invitation["invitation"]["id"]
         revoked = owner.post(f"/api/admin/onboarding/invitations/{invitation_id}/revoke", headers=OWNER_HEADERS, json={})
@@ -227,6 +321,8 @@ def test_pwa_manifest_icons_and_service_worker_are_private_data_safe(tmp_path):
         worker_response = client.get("/service-worker.js")
         assert worker_response.headers["service-worker-allowed"] == "/"
         worker = worker_response.text
+        assert 'const CACHE = "xoduz-shell-v2"' in worker
+        assert '"/static/app.js?v=4.1.0"' in worker
         assert 'url.pathname.startsWith("/api/")' in worker
         assert 'url.pathname.startsWith("/onboard/")' in worker
         assert client.get("/static/icons/xoduz-192.png").headers["content-type"] == "image/png"

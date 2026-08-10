@@ -155,6 +155,8 @@ def create_remote_access_router(settings: Settings) -> APIRouter:
             return _page("Invitation unavailable", "<p>This invitation is invalid, expired, revoked, or already used.</p>")
         if invitation.get("tailscale_invite_url"):
             network = f"<p><a class='button' rel='noreferrer' href='{escape(invitation['tailscale_invite_url'], quote=True)}'>1. Join the private Tailscale network</a></p>"
+        elif invitation.get("tailscale_status") == "created":
+            network = "<p class='notice'>The owner generated a Tailscale member invitation separately. Confirm this device is connected to the private tailnet before continuing.</p>"
         elif invitation.get("tailscale_status") == "failed":
             network = "<p class='notice'>The Tailscale invitation could not be created. Ask the owner to add this device to the private tailnet before continuing.</p>"
         else:
@@ -193,6 +195,14 @@ def create_remote_access_router(settings: Settings) -> APIRouter:
             },
         }
 
+    @router.get("/api/onboarding/me")
+    def enrollment_state(request: Request, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        enrolled = request.app.state.store.is_enrolled_user(user["id"])
+        return {
+            "invitation_enrolled": enrolled,
+            "conversation_only": enrolled and user["role"] != "admin",
+        }
+
     @router.post("/api/admin/onboarding/invitations", status_code=201)
     async def create_invitation(payload: InvitationCreate, request: Request, owner: dict[str, Any] = Depends(require_owner)) -> dict[str, Any]:
         store: EnrollmentStore = request.app.state.store
@@ -220,6 +230,7 @@ def create_remote_access_router(settings: Settings) -> APIRouter:
             "invitation": store.invitation(invitation["id"]),
             "invitation_url": invitation_url,
             "qr_image": _qr_data_url(invitation_url),
+            "tailscale_qr_image": _qr_data_url(tailnet["url"]) if tailnet.get("status") == "created" and tailnet.get("url") else "",
             "tailscale": tailnet,
             "secret_visible_once": True,
         }

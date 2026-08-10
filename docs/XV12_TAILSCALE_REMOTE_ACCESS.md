@@ -17,17 +17,17 @@ The sole Owner remains the account bound to `XV12_OWNER_GOOGLE_SUB`. Email and d
 
 ## Private configuration
 
-Create untracked `config/.env.local` from `.env.example`. Production remote use normally includes:
+Create untracked `config/.env.local` from `.env.example`. This deployment's non-secret topology is:
 
 ```dotenv
 XV12_AUTH_MODE=google
 XV12_GOOGLE_CLIENT_ID=...
 XV12_GOOGLE_CLIENT_SECRET=...
-XV12_GOOGLE_REDIRECT_URI=https://device.tailnet-name.ts.net:10000/api/auth/google/callback
+XV12_GOOGLE_REDIRECT_URI=https://omega.tailce2276.ts.net:10000/api/auth/google/callback
 XV12_OWNER_GOOGLE_SUB=...
 XV12_COOKIE_SECURE=1
 
-XV12_TAILSCALE_SERVE_ORIGIN=https://device.tailnet-name.ts.net:10000
+XV12_TAILSCALE_SERVE_ORIGIN=https://omega.tailce2276.ts.net:10000
 XV12_TAILSCALE_API_TOKEN=...
 XV12_TAILSCALE_TAILNET=tailnet-name.ts.net
 XV12_TAILSCALE_ROLE=member
@@ -37,7 +37,15 @@ XV12_ONBOARDING_INVITE_TTL_HOURS=24
 
 `XV12_TAILSCALE_API_TOKEN` and `XV12_TAILSCALE_TAILNET` are optional. When both are present, XV12 requests an email-less member invitation from the Tailscale API. When absent or rejected, the Owner UI reports that truthfully and the XV12 invitation remains independently manageable. API credentials are server-only.
 
-If a new recipient cannot reach the private Serve URL before joining the tailnet, set `XV12_ONBOARDING_BASE_URL` to a private LAN/bootstrap HTTPS origin that routes to this same app. Do not point it at a public Funnel endpoint.
+The Owner UI presents onboarding as two ordered steps: join the tailnet first, then scan the private XV12 enrollment QR. If Tailscale API automation is unavailable, the UI says that tailnet access must be arranged separately. Do not point onboarding at a public Funnel endpoint.
+
+The preserved Serve topology on this host is:
+
+- `https://omega.tailce2276.ts.net:443` → `127.0.0.1:8084` (Calibration IQ)
+- `https://omega.tailce2276.ts.net:8443` → `127.0.0.1:3134` (unrelated existing service)
+- `https://omega.tailce2276.ts.net:10000` → `127.0.0.1:8120` (XV12)
+
+Funnel is disabled. XV12 must not reset or replace the other routes.
 
 Register the exact `XV12_GOOGLE_REDIRECT_URI` in the Google OAuth client before testing production sign-in.
 
@@ -55,8 +63,8 @@ The script verifies that XV12 listens only on loopback, preserves unrelated Serv
 
 1. Sign in as the Owner and open **Settings → Users & Onboarding**.
 2. Choose whether approval is required and select **Create invitation**.
-3. Share the one-time link or display its QR code. The raw secret is shown once; SQLite stores only its SHA-256 hash.
-4. If Tailscale API automation is configured, the recipient first follows the Tailscale join link on the guided page. Otherwise, add them to the tailnet separately.
+3. If Tailscale API automation is configured, share the Step 1 member-invite QR; otherwise add the recipient to the tailnet separately.
+4. After the recipient joins the tailnet, share the Step 2 XV12 link or QR. The raw secret is shown once; SQLite stores only its SHA-256 hash.
 5. The recipient returns through the private XODUZ URL and selects **Continue with Google**.
 6. XV12 carries only a short-lived server-side handoff through the existing OIDC state record. The secret is stripped from the visible URL before Google starts.
 7. On callback, XV12 atomically consumes the invitation and binds the verified Google `sub`, email, and name. A replay or identity collision fails closed.

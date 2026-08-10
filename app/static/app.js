@@ -3,6 +3,7 @@ const state = {
   pendingAttachments: [], controller: null, sending: false, pinnedToBottom: true,
   voiceSettings: null, availableVoices: [], effectiveVoice: null, voiceInitialized: false, ttsSpeaking: false,
   latestInvitation: null,
+  enrollment: null,
   installPrompt: null,
 };
 const $ = (selector) => document.querySelector(selector);
@@ -78,9 +79,10 @@ async function boot() {
   }
   try {
     state.user = await api("/api/auth/me");
+    state.enrollment = await api("/api/onboarding/me");
     showApp();
-    const common = [loadConversations(), checkHealth()];
-    common.push(loadProjects(), loadVoiceSettings());
+    const common = [loadConversations(), checkHealth(), loadVoiceSettings()];
+    if (!state.enrollment.conversation_only) common.push(loadProjects());
     await Promise.all(common);
   } catch { showLogin(config); }
 }
@@ -92,6 +94,10 @@ function showApp() {
   $("#user-name").textContent = name; $("#user-role").textContent = role;
   $("#top-user").textContent = `${name} · ${role}`;
   $("#user-initial").textContent = name.slice(0, 1).toUpperCase(); $("#welcome-name").textContent = `What are we working on, ${name}?`;
+  const conversationOnly = Boolean(state.enrollment?.conversation_only);
+  $("#projects-button").classList.toggle("hidden", conversationOnly);
+  $("#active-project-chip").classList.add("hidden");
+  $("#attachment-button").classList.toggle("hidden", conversationOnly);
 }
 
 function speechEngine() { return window.__XV12_SPEECH_SYNTHESIS__ || window.speechSynthesis || null; }
@@ -465,7 +471,7 @@ async function copyInvitationLink(value) {
 
 async function renderAuthorizedUsers(content) {
   const data = await api("/api/admin/onboarding");
-  content.innerHTML = `<p class="eyebrow">OWNER · PRIVATE ACCESS</p><h2>Users & Onboarding</h2><p>Tailscale keeps XODUZ private. Google verifies identity. A one-time XV12 invitation enrolls exactly one immutable Google identity, and XV12 permissions authorize capabilities.</p><div class="settings-actions"><button id="invite-authorized-user" class="primary-button" type="button">Create invitation</button><label class="toggle-control"><input id="invite-approval" type="checkbox"> Require approval</label><span class="setting-note">One use · expires automatically</span></div><section id="latest-invitation" class="settings-section hidden"><h3>Share this invitation now</h3><p class="setting-note">The secret link is shown once. XV12 persists only its hash.</p><div class="invitation-copy"><input id="invitation-url" readonly><button id="copy-invitation" class="secondary-button" type="button">Copy link</button></div><img id="invitation-qr" class="invitation-qr" alt="One-time XODUZ onboarding QR code"></section><section class="settings-section"><h3>Users</h3><div id="authorized-user-list" class="project-list"></div></section><section class="settings-section"><h3>Invitations</h3><div id="authorized-invitation-list" class="project-list"></div></section><p class="setting-note">Revoking XODUZ access invalidates application sessions and grants immediately. Tailnet membership remains an independent Tailscale control.</p>`;
+  content.innerHTML = `<p class="eyebrow">OWNER · PRIVATE ACCESS</p><h2>Users & Onboarding</h2><p>Tailscale keeps XODUZ private. Google verifies identity. A one-time XV12 invitation enrolls exactly one immutable Google identity, and XV12 permissions authorize capabilities.</p><div class="settings-actions"><button id="invite-authorized-user" class="primary-button" type="button">Create invitation</button><label class="toggle-control"><input id="invite-approval" type="checkbox"> Require approval</label><span class="setting-note">One use · expires automatically</span></div><section id="latest-invitation" class="settings-section hidden"><h3>Share these steps now</h3><div id="tailscale-invitation-step" class="hidden"><h4>Step 1 · Join the private network</h4><p class="setting-note">Scan this first to accept the email-free Tailscale member invitation.</p><img id="tailscale-invitation-qr" class="invitation-qr" alt="Tailscale member invitation QR code"></div><div id="tailscale-manual-step" class="notice hidden"><strong>Step 1 · Arrange Tailscale access</strong><p>Tailscale invitation automation is unavailable. Add the recipient to the private tailnet separately before they scan Step 2.</p></div><h4>Step 2 · Enroll in XODUZ</h4><p class="setting-note">This secret link is shown once. XV12 persists only its hash.</p><div class="invitation-copy"><input id="invitation-url" readonly><button id="copy-invitation" class="secondary-button" type="button">Copy link</button></div><img id="invitation-qr" class="invitation-qr" alt="One-time XODUZ onboarding QR code"></section><section class="settings-section"><h3>Users</h3><div id="authorized-user-list" class="project-list"></div></section><section class="settings-section"><h3>Invitations</h3><div id="authorized-invitation-list" class="project-list"></div></section><p class="setting-note">Revoking XODUZ access invalidates application sessions and grants immediately. Tailnet membership remains an independent Tailscale control.</p>`;
   content.querySelector("#invite-approval").checked = data.configuration.approval_default;
   const userList = content.querySelector("#authorized-user-list");
   data.users.forEach((user) => {
@@ -510,6 +516,10 @@ async function renderAuthorizedUsers(content) {
     latest.classList.remove("hidden"); content.querySelector("#invitation-url").value = state.latestInvitation.invitation_url;
     content.querySelector("#copy-invitation").onclick = () => copyInvitationLink(state.latestInvitation.invitation_url);
     content.querySelector("#invitation-qr").src = state.latestInvitation.qr_image;
+    const hasTailscaleInvite = Boolean(state.latestInvitation.tailscale_qr_image);
+    content.querySelector("#tailscale-invitation-step").classList.toggle("hidden", !hasTailscaleInvite);
+    content.querySelector("#tailscale-manual-step").classList.toggle("hidden", hasTailscaleInvite);
+    if (hasTailscaleInvite) content.querySelector("#tailscale-invitation-qr").src = state.latestInvitation.tailscale_qr_image;
   }
   content.querySelector("#invite-authorized-user").onclick = async () => {
     const approvalRequired = content.querySelector("#invite-approval").checked;
