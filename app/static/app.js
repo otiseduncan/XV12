@@ -2,6 +2,8 @@ const state = {
   user: null, conversations: [], projects: [], currentConversation: null,
   pendingAttachments: [], controller: null, sending: false, pinnedToBottom: true,
   voiceSettings: null, availableVoices: [], effectiveVoice: null, voiceInitialized: false, ttsSpeaking: false,
+  latestInvitation: null,
+  installPrompt: null,
 };
 const $ = (selector) => document.querySelector(selector);
 const loginView = $("#login-view"), appView = $("#app-view"), messages = $("#messages");
@@ -50,6 +52,10 @@ async function api(path, options = {}) {
   return response.status === 204 ? null : response.json();
 }
 
+function ownerWrite(path, options = {}) {
+  return api(path, { ...options, headers: { "X-XV12-CSRF": "1", ...(options.headers || {}) } });
+}
+
 function toast(message, kind = "info") {
   const item = document.createElement("div"); item.className = `toast ${kind}`; item.textContent = message;
   $("#toast-region").append(item); setTimeout(() => item.remove(), 4200);
@@ -70,15 +76,21 @@ async function boot() {
     window.__XV12_SPEECH_SYNTHESIS__ = new ControlledSpeechSynthesis(voiceTestFailure);
     window.__XV12_SPEECH_UTTERANCE__ = ControlledSpeechSynthesisUtterance;
   }
-  try { state.user = await api("/api/auth/me"); showApp(); await Promise.all([loadConversations(), loadProjects(), checkHealth(), loadVoiceSettings()]); }
-  catch { showLogin(config); }
+  try {
+    state.user = await api("/api/auth/me");
+    showApp();
+    const common = [loadConversations(), checkHealth()];
+    common.push(loadProjects(), loadVoiceSettings());
+    await Promise.all(common);
+  } catch { showLogin(config); }
 }
 
 function showApp() {
   loginView.classList.add("hidden"); appView.classList.remove("hidden");
   const name = state.user.conversational_name || state.user.display_name;
-  $("#user-name").textContent = name; $("#user-role").textContent = state.user.role;
-  $("#top-user").textContent = `${name} · ${state.user.role}`;
+  const role = state.user.role_label || state.user.role;
+  $("#user-name").textContent = name; $("#user-role").textContent = role;
+  $("#top-user").textContent = `${name} · ${role}`;
   $("#user-initial").textContent = name.slice(0, 1).toUpperCase(); $("#welcome-name").textContent = `What are we working on, ${name}?`;
 }
 
@@ -441,6 +453,75 @@ async function renderCapabilityAdmin(content) {
   select.addEventListener("change", loadGrants); await loadGrants();
 }
 
+function formatAccessTime(value) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
+async function copyInvitationLink(value) {
+  try { await navigator.clipboard.writeText(value); toast("Invitation link copied.", "success"); }
+  catch { toast("Copy was unavailable. Select and copy the link manually.", "error"); }
+}
+
+async function renderAuthorizedUsers(content) {
+  const data = await api("/api/admin/onboarding");
+  content.innerHTML = `<p class="eyebrow">OWNER · PRIVATE ACCESS</p><h2>Users & Onboarding</h2><p>Tailscale keeps XODUZ private. Google verifies identity. A one-time XV12 invitation enrolls exactly one immutable Google identity, and XV12 permissions authorize capabilities.</p><div class="settings-actions"><button id="invite-authorized-user" class="primary-button" type="button">Create invitation</button><label class="toggle-control"><input id="invite-approval" type="checkbox"> Require approval</label><span class="setting-note">One use · expires automatically</span></div><section id="latest-invitation" class="settings-section hidden"><h3>Share this invitation now</h3><p class="setting-note">The secret link is shown once. XV12 persists only its hash.</p><div class="invitation-copy"><input id="invitation-url" readonly><button id="copy-invitation" class="secondary-button" type="button">Copy link</button></div><img id="invitation-qr" class="invitation-qr" alt="One-time XODUZ onboarding QR code"></section><section class="settings-section"><h3>Users</h3><div id="authorized-user-list" class="project-list"></div></section><section class="settings-section"><h3>Invitations</h3><div id="authorized-invitation-list" class="project-list"></div></section><p class="setting-note">Revoking XODUZ access invalidates application sessions and grants immediately. Tailnet membership remains an independent Tailscale control.</p>`;
+  content.querySelector("#invite-approval").checked = data.configuration.approval_default;
+  const userList = content.querySelector("#authorized-user-list");
+  data.users.forEach((user) => {
+    const row = document.createElement("div"); row.className = "project-row";
+    const details = document.createElement("div"), name = document.createElement("strong"), meta = document.createElement("span");
+    name.textContent = `${user.display_name} · ${user.role === "admin" ? "Owner" : "User"} · ${user.status}`;
+    meta.textContent = `${user.email} · Last sign-in ${formatAccessTime(user.last_login_at)}`;
+    details.append(name, meta); row.append(details);
+    if (user.role !== "admin" && user.status === "active") {
+      const revoke = document.createElement("button"); revoke.className = "secondary-button"; revoke.textContent = "Revoke";
+      revoke.onclick = async () => { await ownerWrite(`/api/admin/onboarding/users/${user.id}/revoke`, { method: "POST", body: "{}" }); toast("XODUZ access revoked.", "success"); await renderAuthorizedUsers(content); };
+      row.append(revoke);
+    } else if (user.role !== "admin" && user.status === "disabled") {
+      const reinvite = document.createElement("button"); reinvite.className = "secondary-button"; reinvite.textContent = "Reinvite";
+      reinvite.onclick = async () => { state.latestInvitation = await ownerWrite("/api/admin/onboarding/invitations", { method: "POST", body: JSON.stringify({ target_user_id: user.id, approval_required: true }) }); await renderAuthorizedUsers(content); };
+      row.append(reinvite);
+    }
+    userList.append(row);
+  });
+  const invitationList = content.querySelector("#authorized-invitation-list");
+  data.invitations.forEach((invitation) => {
+    const row = document.createElement("div"); row.className = "project-row";
+    const details = document.createElement("div"), title = document.createElement("strong"), meta = document.createElement("span");
+    title.textContent = `Invitation · ${invitation.status.replaceAll("_", " ")}`;
+    meta.textContent = `Created ${formatAccessTime(invitation.created_at)} · Expires ${formatAccessTime(invitation.expires_at)} · Tailscale ${invitation.tailscale_status}`;
+    details.append(title, meta); row.append(details);
+    if (invitation.status === "pending_approval") {
+      const approve = document.createElement("button"); approve.className = "primary-button"; approve.textContent = "Approve";
+      approve.onclick = async () => { await ownerWrite(`/api/admin/onboarding/invitations/${invitation.id}/approve`, { method: "POST", body: "{}" }); toast("User approved.", "success"); await renderAuthorizedUsers(content); };
+      row.append(approve);
+    }
+    if (["pending", "pending_approval"].includes(invitation.status)) {
+      const revoke = document.createElement("button"); revoke.className = "secondary-button"; revoke.textContent = "Revoke";
+      revoke.onclick = async () => { await ownerWrite(`/api/admin/onboarding/invitations/${invitation.id}/revoke`, { method: "POST", body: "{}" }); toast("Invitation revoked.", "success"); await renderAuthorizedUsers(content); };
+      row.append(revoke);
+    }
+    invitationList.append(row);
+  });
+  if (!data.invitations.length) invitationList.innerHTML = `<p class="setting-note">No invitations have been created.</p>`;
+  const latest = content.querySelector("#latest-invitation");
+  if (state.latestInvitation?.invitation_url) {
+    latest.classList.remove("hidden"); content.querySelector("#invitation-url").value = state.latestInvitation.invitation_url;
+    content.querySelector("#copy-invitation").onclick = () => copyInvitationLink(state.latestInvitation.invitation_url);
+    content.querySelector("#invitation-qr").src = state.latestInvitation.qr_image;
+  }
+  content.querySelector("#invite-authorized-user").onclick = async () => {
+    const approvalRequired = content.querySelector("#invite-approval").checked;
+    state.latestInvitation = await ownerWrite("/api/admin/onboarding/invitations", { method: "POST", body: JSON.stringify({ approval_required: approvalRequired }) });
+    toast(state.latestInvitation.tailscale.status === "created" ? "XV12 and Tailscale invitations created." : "XV12 invitation created; Tailscale automation is unavailable.", "success"); await renderAuthorizedUsers(content);
+  };
+  if (!data.configuration.onboarding_origin) {
+    content.querySelector("#invite-authorized-user").disabled = true;
+    content.querySelector("#invite-authorized-user").nextElementSibling.nextElementSibling.textContent = "Configure XV12_TAILSCALE_SERVE_ORIGIN or XV12_ONBOARDING_BASE_URL first.";
+  }
+}
+
 async function showModal(kind) {
   const content = $("#modal-content");
   if (kind === "projects") {
@@ -451,10 +532,12 @@ async function showModal(kind) {
     const listing = await api("/api/capabilities"); content.innerHTML = `<p class="eyebrow">AUTHORITATIVE REGISTRY</p><h2>Capabilities</h2><p>${listing.capabilities.length} capabilities are authorized for this account.</p><ul class="modal-list"></ul>`; const list = content.querySelector("ul"); listing.capabilities.forEach((item) => { const li = document.createElement("li"); li.innerHTML = `<strong></strong><span></span>`; li.querySelector("strong").textContent = item.id; li.querySelector("span").textContent = `Tier ${item.risk_tier} · ${item.health} · ${item.description}`; list.append(li); });
   } else if (kind === "admin-capabilities") {
     await renderCapabilityAdmin(content);
+  } else if (kind === "onboarding") {
+    await renderAuthorizedUsers(content);
   } else {
-    content.innerHTML = `<p class="eyebrow">XODUZ XV12</p><h2>Settings</h2><p>Preferences are private to your authenticated account.</p><section class="settings-section"><h3>Appearance</h3><div class="setting-row"><span class="setting-label">Theme</span><span class="account-value">XODUZ Dark</span></div></section><section class="settings-section"><h3>Voice</h3><div class="setting-row"><label for="voice-select">XODUZ voice</label><select id="voice-select" aria-label="XODUZ voice"></select></div><p id="voice-runtime" class="setting-note"></p><div class="setting-row"><label for="voice-volume">Volume</label><div class="volume-control"><input id="voice-volume" type="range" min="0" max="100" step="1"><output id="voice-volume-value" for="voice-volume"></output></div></div><div class="setting-row"><span class="setting-label">Spoken output</span><label class="toggle-control"><input id="voice-muted" type="checkbox"> Mute X</label></div><div class="setting-row"><span class="setting-label">Test output</span><div class="settings-actions"><button id="preview-voice" class="secondary-button" type="button">Preview Voice</button></div></div><p id="voice-preview-status" class="setting-note" aria-live="polite"></p></section><section class="settings-section"><h3>Account</h3><div class="setting-row"><span class="setting-label">Signed in</span><span id="settings-account" class="account-value"></span></div><div class="setting-row"><span class="setting-label">Session</span><button id="settings-logout" class="secondary-button" type="button">Log out</button></div></section>`;
-    if (state.user.role === "admin") content.insertAdjacentHTML("beforeend", `<section class="settings-section"><h3>Admin</h3><div class="setting-row"><span class="setting-label">User capability access</span><button id="admin-capability-settings" class="secondary-button" type="button">Manage permissions</button></div></section>`);
-    $("#settings-account").textContent = `${state.user.conversational_name} · ${state.user.role}`;
+    content.innerHTML = `<p class="eyebrow">XODUZ XV12</p><h2>Settings</h2><p>Preferences are private to your authenticated account.</p><section class="settings-section"><h3>Application</h3><div class="setting-row"><span class="setting-label">Theme</span><span class="account-value">XODUZ Dark</span></div><div class="setting-row"><span class="setting-label">Android app</span><button id="settings-install" class="secondary-button" type="button">Install XODUZ</button></div></section><section class="settings-section"><h3>Voice</h3><div class="setting-row"><label for="voice-select">XODUZ voice</label><select id="voice-select" aria-label="XODUZ voice"></select></div><p id="voice-runtime" class="setting-note"></p><div class="setting-row"><label for="voice-volume">Volume</label><div class="volume-control"><input id="voice-volume" type="range" min="0" max="100" step="1"><output id="voice-volume-value" for="voice-volume"></output></div></div><div class="setting-row"><span class="setting-label">Spoken output</span><label class="toggle-control"><input id="voice-muted" type="checkbox"> Mute X</label></div><div class="setting-row"><span class="setting-label">Test output</span><div class="settings-actions"><button id="preview-voice" class="secondary-button" type="button">Preview Voice</button></div></div><p id="voice-preview-status" class="setting-note" aria-live="polite"></p></section><section class="settings-section"><h3>Account</h3><div class="setting-row"><span class="setting-label">Signed in</span><span id="settings-account" class="account-value"></span></div><div class="setting-row"><span class="setting-label">Session</span><button id="settings-logout" class="secondary-button" type="button">Log out</button></div></section>`;
+    if (state.user.role === "admin") content.insertAdjacentHTML("beforeend", `<section class="settings-section"><h3>Admin</h3><div class="setting-row"><span class="setting-label">Private enrollment</span><button id="onboarding-settings" class="secondary-button" type="button">Users & Onboarding</button></div><div class="setting-row"><span class="setting-label">User capability access</span><button id="admin-capability-settings" class="secondary-button" type="button">Manage permissions</button></div></section>`);
+    $("#settings-account").textContent = `${state.user.conversational_name} · ${state.user.role_label || state.user.role}`;
     refreshVoiceControls();
     $("#voice-select").addEventListener("change", (event) => saveVoiceSettings({ voice_name: event.target.value }));
     $("#voice-volume").addEventListener("input", (event) => { $("#voice-volume-value").value = event.target.value; });
@@ -465,7 +548,9 @@ async function showModal(kind) {
       $("#voice-preview-status").textContent = started ? `Previewing ${state.effectiveVoice.name} at ${state.voiceSettings.voice_volume}%.` : "Voice preview did not start.";
     });
     $("#settings-logout").addEventListener("click", async () => { speechEngine()?.cancel?.(); await api("/api/auth/logout", { method: "POST" }); window.location.reload(); });
+    $("#settings-install").addEventListener("click", installXoduz);
     $("#admin-capability-settings")?.addEventListener("click", () => showModal("admin-capabilities"));
+    $("#onboarding-settings")?.addEventListener("click", () => showModal("onboarding"));
   }
   if (!$("#modal").open) $("#modal").showModal();
 }
@@ -487,7 +572,22 @@ function setupSpeech() {
 
 function resizeInput() { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; }
 
+async function installXoduz() {
+  if (!state.installPrompt) { toast("Use your browser menu and choose Install app or Add to Home screen."); return; }
+  state.installPrompt.prompt();
+  await state.installPrompt.userChoice;
+  state.installPrompt = null;
+  $("#install-app").classList.add("hidden");
+}
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault(); state.installPrompt = event; $("#install-app").classList.remove("hidden");
+});
+window.addEventListener("appinstalled", () => { state.installPrompt = null; $("#install-app").classList.add("hidden"); toast("XODUZ installed.", "success"); });
+if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));
+
 $("#google-login").addEventListener("click", () => window.location.assign("/api/auth/google/start"));
+$("#install-app").addEventListener("click", installXoduz);
 document.querySelectorAll("[data-persona]").forEach((button) => button.addEventListener("click", async () => { $("#login-status").textContent = "Signing in…"; try { state.user = await api("/api/auth/test-login", { method: "POST", body: JSON.stringify({ persona: button.dataset.persona }) }); showApp(); await Promise.all([loadConversations(), loadProjects(), checkHealth()]); } catch (error) { $("#login-status").textContent = error.message; } }));
 $("#logout").addEventListener("click", async () => { speechEngine()?.cancel?.(); await api("/api/auth/logout", { method: "POST" }); window.location.reload(); });
 $("#top-logout").addEventListener("click", async () => { speechEngine()?.cancel?.(); await api("/api/auth/logout", { method: "POST" }); window.location.reload(); });

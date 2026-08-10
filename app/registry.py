@@ -165,6 +165,7 @@ class CapabilityGateway:
     def __init__(self, registry: CapabilityRegistry) -> None:
         self.registry = registry
         self.handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
+        self.audit_logger: Any | None = None
 
     def register(self, capability_id: str, handler: Callable[[dict[str, Any]], Any]) -> None:
         if capability_id not in self.registry.capabilities:
@@ -213,6 +214,8 @@ class CapabilityGateway:
     async def execute(self, capability_id: str, user: dict[str, Any], arguments: dict[str, Any]) -> tuple[Any, AuthorizationDecision]:
         decision = self.registry.authorize(capability_id, user)
         if not decision.allowed:
+            if self.audit_logger:
+                self.audit_logger.info(json.dumps({"event": "security.privileged_action_denied", "user_id": user["id"], "capability_id": capability_id, "reason": decision.reason}))
             raise CapabilityDenied(decision.reason)
         handler = self.handlers.get(capability_id)
         if not handler:
@@ -241,6 +244,8 @@ class CapabilityGateway:
                 result = {**result, "status": mapped, "domain_status": domain_status}
             if result["status"] in {"success", "partial_success", "no_result"}:
                 result = self._attach_evidence_contract(result, capability_id)
+            if self.audit_logger and user.get("role") == "admin":
+                self.audit_logger.info(json.dumps({"event": "security.owner_capability_executed", "user_id": user["id"], "capability_id": capability_id, "status": result.get("status")}))
             return result, decision
         except (TimeoutError, asyncio.TimeoutError):
             return {"status": "timeout", "message": "Capability execution timed out."}, decision

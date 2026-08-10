@@ -29,6 +29,8 @@ Controlled test mode is intentionally limited to three fixed local identities an
 
 The sole administrator is bound by `XV12_OWNER_GOOGLE_SUB`. Email is profile data, not the permanent identity key. No UI can promote or transfer administrator status.
 
+Private remote access through Tailscale Serve is optional. Tailscale supplies reachability only; Google OIDC remains XV12 authentication. New Google identities enroll through hashed, one-time Owner invitations, can require approval, and receive explicit capability grants. The Android-installable PWA includes the real XODUZ icon and never caches APIs or invitation URLs. See `docs/XV12_TAILSCALE_REMOTE_ACCESS.md`. XV12 does not use Tailscale Funnel.
+
 ## Runtime ownership
 
 - UI/backend: `http://127.0.0.1:8120`

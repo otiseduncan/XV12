@@ -28,12 +28,14 @@ from .config import Settings
 from .context import ContextAssembler
 from .creator import CreatorPlatform, create_creator_router
 from .data_tools import adas_coverage, adas_search, calibration_iq_health, calibration_iq_read, start_calibration_iq
-from .database import UserScopedStore, utcnow
+from .database import utcnow
+from .enrollment import EnrollmentMiddleware, EnrollmentStore
 from .model import LlamaModel
 from .model_compat import ToolCallCompatibilityModel
 from .permissions import CapabilityPermissionStore, create_permission_router
 from .registry import CapabilityDenied, CapabilityGateway, CapabilityNotFound, CapabilityRegistry
 from .web_tools import current_search
+from .remote_access import create_remote_access_router
 
 
 class ConversationCreate(BaseModel):
@@ -96,12 +98,13 @@ def _file_sha256(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.load()
-    store = UserScopedStore(settings.database_path, settings.owner_google_sub)
+    store = EnrollmentStore(settings.database_path, settings.owner_google_sub, settings)
     store.initialize()
     settings.attachments_path.mkdir(parents=True, exist_ok=True)
     capability_data = settings.root / "data" / "capabilities" if settings.root in settings.database_path.resolve().parents else settings.database_path.parent / "capabilities"
     permission_store = CapabilityPermissionStore(capability_data / "permissions.sqlite", settings.database_path)
     permission_store.initialize()
+    store.permission_store = permission_store
     registry = CapabilityRegistry(settings.root / "config" / "capabilities.v1.json", permission_store)
     artifact_store = ArtifactStore(
         capability_data / "artifacts.sqlite",
@@ -134,6 +137,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     model = ToolCallCompatibilityModel(LlamaModel(settings))
     context = ContextAssembler(store, settings.model_context_tokens)
     turn_logger = _configure_logging(settings)
+    gateway.audit_logger = turn_logger
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -154,7 +158,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(create_permission_router(permission_store))
     app.include_router(create_artifact_router(artifact_store))
     app.include_router(create_creator_router(creator_platform))
+    app.include_router(create_remote_access_router(settings))
     app.add_middleware(ConversationContextMiddleware)
+    app.add_middleware(EnrollmentMiddleware)
 
     async def health_document() -> dict[str, Any]:
         model_health = await app.state.model.health()
@@ -292,7 +298,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     creator_platform.register(gateway)
 
     @app.get("/api/health")
-    async def health() -> dict[str, Any]:
+    async def health(request: Request) -> dict[str, Any]:
         return await health_document()
 
     @app.get("/api/runtime/fingerprint")
@@ -565,6 +571,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
         return FileResponse(static_dir / "index.html")
+
+    @app.get("/service-worker.js", include_in_schema=False)
+    def service_worker() -> FileResponse:
+        return FileResponse(
+            static_dir / "service-worker.js",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+        )
 
     @app.exception_handler(Exception)
     async def unhandled_error(_: Request, error: Exception) -> JSONResponse:

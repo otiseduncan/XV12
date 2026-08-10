@@ -56,6 +56,13 @@ class Settings:
     comfyui_default_height: int = 1024
     comfyui_timeout_seconds: int = 300
     comfyui_output_path: Path = ROOT / "data" / "capabilities" / "creator" / "media" / "comfyui"
+    tailscale_serve_origin: str = ""
+    tailscale_api_token: str = ""
+    tailscale_tailnet: str = ""
+    tailscale_role: str = "member"
+    onboarding_base_url: str = ""
+    onboarding_approval_required: bool = True
+    onboarding_invite_ttl_hours: int = 24
 
     @property
     def model_base_url(self) -> str:
@@ -108,4 +115,11 @@ class Settings:
             comfyui_default_height=int(os.getenv("XV12_COMFYUI_DEFAULT_HEIGHT", image.get("default_height", 1024))),
             comfyui_timeout_seconds=int(os.getenv("XV12_COMFYUI_TIMEOUT_SECONDS", image.get("timeout_seconds", 300))),
             comfyui_output_path=ROOT / os.getenv("XV12_COMFYUI_OUTPUT_PATH", image.get("output_path", "data/capabilities/creator/media/comfyui")),
+            tailscale_serve_origin=os.getenv("XV12_TAILSCALE_SERVE_ORIGIN", "").strip().rstrip("/"),
+            tailscale_api_token=os.getenv("XV12_TAILSCALE_API_TOKEN", "").strip(),
+            tailscale_tailnet=os.getenv("XV12_TAILSCALE_TAILNET", "").strip(),
+            tailscale_role=os.getenv("XV12_TAILSCALE_ROLE", "member").strip().casefold(),
+            onboarding_base_url=os.getenv("XV12_ONBOARDING_BASE_URL", "").strip().rstrip("/"),
+            onboarding_approval_required=os.getenv("XV12_ONBOARDING_APPROVAL_REQUIRED", "1").strip().casefold() in {"1", "true", "yes", "on"},
+            onboarding_invite_ttl_hours=max(1, min(168, int(os.getenv("XV12_ONBOARDING_INVITE_TTL_HOURS", "24")))),
         )

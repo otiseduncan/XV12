@@ -4,16 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#071014" />
-    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="XODUZ" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Xoduz" />
     <title>XODUZ XV12</title>
-    <link rel="manifest" href="/static/manifest.webmanifest" />
     <link rel="icon" href="/assets/avatar/xoduz-icon.svg" />
-    <link rel="apple-touch-icon" href="/assets/avatar/xoduz-512.png" />
+    <link rel="apple-touch-icon" href="/static/icons/xoduz-192.png" />
+    <link rel="manifest" href="/static/manifest.webmanifest" />
     <link rel="stylesheet" href="/static/styles.css?v=4.0.0" />
-    <link rel="stylesheet" href="/static/onboarding.css?v=1.0.0" />
   </head>
   <body>
     <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
@@ -25,6 +23,7 @@
         <p class="eyebrow">XODUZ · XV12</p><h1>Meet X.</h1>
         <p class="login-copy">Your private, local, model-first assistant. Sign in to continue.</p>
         <button id="google-login" class="primary-button wide hidden">Continue with Google</button>
+        <button id="install-app" class="secondary-button wide hidden" type="button">Install XODUZ</button>
         <div id="test-login" class="test-login hidden">
           <p>Controlled local identity provider</p>
           <button data-persona="admin" class="primary-button wide">Continue as Otis</button>
@@ -44,7 +43,6 @@
         <div class="sidebar-footer">
           <button id="projects-button" class="nav-button"><span>▱</span><b>Projects</b><small id="project-count">0</small></button>
           <button id="tools-button" class="nav-button"><span>◇</span><b>Tools</b><small>Live</small></button>
-          <button id="invites-button" class="nav-button hidden"><span>⌁</span><b>Invite User</b><small>QR</small></button>
           <button id="settings-button" class="nav-button"><span>⚙</span><b>Settings</b></button>
           <div class="user-card"><div id="user-initial" class="user-initial">X</div><div class="user-details"><strong id="user-name"></strong><span id="user-role"></span></div><button id="logout" class="icon-button" title="Sign out" aria-label="Sign out">↪</button></div>
         </div>
@@ -74,7 +72,7 @@
             <div class="composer-wrap">
               <div id="attachment-chips" class="attachment-chips"></div>
               <form id="composer" class="composer">
-                <label class="icon-button composer-action" title="Attach a file"><input id="file-input" type="file" hidden /><span>＋</span></label>
+                <label id="attachment-button" class="icon-button composer-action" title="Attach a file"><input id="file-input" type="file" hidden /><span>＋</span></label>
                 <textarea id="message-input" rows="1" maxlength="20000" placeholder="Message X…" aria-label="Message X"></textarea>
                 <button id="mic-button" type="button" class="icon-button composer-action" title="Dictate" aria-label="Start dictation">⌁</button>
                 <button id="send-button" type="submit" class="send-button" aria-label="Send message">↑</button>
@@ -87,8 +85,6 @@
     </main>
 
     <dialog id="modal" class="modal"><button id="close-modal" class="icon-button modal-close" aria-label="Close">×</button><div id="modal-content"></div></dialog>
-    <script src="/static/pwa.js?v=1.0.0" defer></script>
     <script src="/static/app.js?v=4.0.0" defer></script>
-    <script src="/static/onboarding.js?v=1.0.0" defer></script>
   </body>
 </html>
