@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from .auth import current_user
+from .onboarding import attach_onboarding_routes
 
 
 def utcnow() -> str:
@@ -188,4 +189,5 @@ def create_permission_router(permission_store: CapabilityPermissionStore) -> API
         request.app.state.store.revoke_user_sessions(user_id)
         return Response(status_code=204)
 
+    attach_onboarding_routes(router, permission_store)
     return router

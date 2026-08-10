@@ -4,9 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#071014" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Xoduz" />
     <title>XODUZ XV12</title>
+    <link rel="manifest" href="/static/manifest.webmanifest" />
     <link rel="icon" href="/assets/avatar/xoduz-icon.svg" />
+    <link rel="apple-touch-icon" href="/assets/avatar/xoduz-512.png" />
     <link rel="stylesheet" href="/static/styles.css?v=4.0.0" />
+    <link rel="stylesheet" href="/static/onboarding.css?v=1.0.0" />
   </head>
   <body>
     <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
@@ -37,6 +44,7 @@
         <div class="sidebar-footer">
           <button id="projects-button" class="nav-button"><span>▱</span><b>Projects</b><small id="project-count">0</small></button>
           <button id="tools-button" class="nav-button"><span>◇</span><b>Tools</b><small>Live</small></button>
+          <button id="invites-button" class="nav-button hidden"><span>⌁</span><b>Invite User</b><small>QR</small></button>
           <button id="settings-button" class="nav-button"><span>⚙</span><b>Settings</b></button>
           <div class="user-card"><div id="user-initial" class="user-initial">X</div><div class="user-details"><strong id="user-name"></strong><span id="user-role"></span></div><button id="logout" class="icon-button" title="Sign out" aria-label="Sign out">↪</button></div>
         </div>
@@ -79,6 +87,8 @@
     </main>
 
     <dialog id="modal" class="modal"><button id="close-modal" class="icon-button modal-close" aria-label="Close">×</button><div id="modal-content"></div></dialog>
+    <script src="/static/pwa.js?v=1.0.0" defer></script>
     <script src="/static/app.js?v=4.0.0" defer></script>
+    <script src="/static/onboarding.js?v=1.0.0" defer></script>
   </body>
 </html>
