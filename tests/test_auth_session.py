@@ -14,9 +14,55 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 
 import app.auth as auth_module
-from app.auth import verify_google_id_token
+from app.auth import GOOGLE_JWT_CLOCK_SKEW_SECONDS, verify_google_id_token
 from app.main import create_app
 from .conftest import login, make_settings
+
+
+def _signed_google_token(settings, *, iat_offset_seconds: int = 0, nonce: str = "single-use-nonce"):
+    """Build a correctly signed RS256 Google-style ID token and matching JWKS key."""
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
+    jwk["kid"] = "google-test-key"
+    now = datetime.now(UTC)
+    claims = {
+        "iss": "https://accounts.google.com",
+        "aud": settings.google_client_id,
+        "sub": "google-user-123",
+        "email": "verified@example.test",
+        "email_verified": True,
+        "name": "Verified User",
+        "nonce": nonce,
+        "iat": int(now.timestamp()) + iat_offset_seconds,
+        "exp": int((now + timedelta(minutes=5)).timestamp()),
+    }
+    token = jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": jwk["kid"]})
+    return token, jwk
+
+
+def _patch_jwks(monkeypatch, jwk):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"keys": [jwk]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url):
+            assert url == "https://www.googleapis.com/oauth2/v3/certs"
+            return FakeResponse()
+
+    monkeypatch.setattr(auth_module.httpx, "AsyncClient", FakeClient)
 
 
 @pytest.mark.auth
@@ -47,49 +93,36 @@ def test_production_google_start_has_state_nonce_and_correct_redirect(tmp_path):
 @pytest.mark.auth
 def test_google_id_token_cryptography_issuer_audience_and_nonce(monkeypatch, tmp_path):
     settings = make_settings(tmp_path, auth_mode="google")
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
-    jwk["kid"] = "google-test-key"
-    now = datetime.now(UTC)
-    claims = {
-        "iss": "https://accounts.google.com",
-        "aud": settings.google_client_id,
-        "sub": "google-user-123",
-        "email": "verified@example.test",
-        "email_verified": True,
-        "name": "Verified User",
-        "nonce": "single-use-nonce",
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=5)).timestamp()),
-    }
-    token = jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": jwk["kid"]})
-
-    class FakeResponse:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"keys": [jwk]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-        async def get(self, url):
-            assert url == "https://www.googleapis.com/oauth2/v3/certs"
-            return FakeResponse()
-
-    monkeypatch.setattr(auth_module.httpx, "AsyncClient", FakeClient)
+    token, jwk = _signed_google_token(settings)
+    _patch_jwks(monkeypatch, jwk)
     verified = asyncio.run(verify_google_id_token(token, "single-use-nonce", settings))
     assert verified["sub"] == "google-user-123"
     with pytest.raises(HTTPException, match="nonce"):
         asyncio.run(verify_google_id_token(token, "replayed-nonce", settings))
+
+
+@pytest.mark.auth
+def test_google_id_token_accepts_one_second_future_iat_within_leeway(monkeypatch, tmp_path):
+    """Reproduce the live ImmatureSignatureError boundary and prove the bounded leeway."""
+    settings = make_settings(tmp_path, auth_mode="google")
+    # Live failure: iat was one second ahead of the validation instant.
+    token, jwk = _signed_google_token(settings, iat_offset_seconds=1)
+    _patch_jwks(monkeypatch, jwk)
+    verified = asyncio.run(verify_google_id_token(token, "single-use-nonce", settings))
+    assert verified["sub"] == "google-user-123"
+    assert GOOGLE_JWT_CLOCK_SKEW_SECONDS == 5
+
+
+@pytest.mark.auth
+def test_google_id_token_rejects_materially_future_iat(monkeypatch, tmp_path):
+    """A token whose iat is far beyond the leeway must still fail closed."""
+    settings = make_settings(tmp_path, auth_mode="google")
+    token, jwk = _signed_google_token(settings, iat_offset_seconds=30)
+    _patch_jwks(monkeypatch, jwk)
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(verify_google_id_token(token, "single-use-nonce", settings))
+    assert exc_info.value.status_code == 401
+    assert "Google identity token validation failed" in str(exc_info.value.detail)
 
 
 @pytest.mark.authorization

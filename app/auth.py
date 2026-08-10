@@ -16,6 +16,10 @@ from .database import UserScopedStore
 
 
 SESSION_COOKIE = "xv12_session"
+# Bounded tolerance for provider/client clock boundary. Covers the observed
+# one-second Google iat skew without relaxing signature, audience, issuer,
+# expiry, required claims, or nonce checks.
+GOOGLE_JWT_CLOCK_SKEW_SECONDS = 5
 
 
 class TestLoginRequest(BaseModel):
@@ -71,6 +75,7 @@ async def verify_google_id_token(id_token: str, nonce: str, settings: Settings) 
             algorithms=["RS256"],
             audience=settings.google_client_id,
             issuer=["https://accounts.google.com", "accounts.google.com"],
+            leeway=GOOGLE_JWT_CLOCK_SKEW_SECONDS,
             options={"require": ["exp", "iat", "iss", "aud", "sub", "nonce"]},
         )
     except jwt.PyJWTError as error:
