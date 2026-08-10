@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import sqlite3
 import threading
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
@@ -12,6 +14,7 @@ from fastapi.testclient import TestClient
 
 import app.auth as auth_module
 import app.remote_access as remote_module
+from app.database import UserScopedStore
 from app.enrollment import EnrollmentDenied, OwnerBootstrapDenied, _oidc_invitation_id
 from app.main import create_app
 from tests.conftest import FakeModel, make_settings
@@ -136,6 +139,120 @@ def test_one_time_owner_bootstrap_binds_verified_google_sub_and_disables_itself(
         app.state.store.issue_owner_bootstrap()
     with TestClient(app, base_url=ORIGIN, follow_redirects=False) as replay:
         assert replay.get(f"/owner-bootstrap/{token}").status_code == 410
+
+
+def test_owner_bootstrap_env_write_failure_rolls_back_database(tmp_path, monkeypatch):
+    app = google_app(tmp_path)
+    private_env = tmp_path / ".env.local"
+    original_env = b"XV12_AUTH_MODE=google\nXV12_OWNER_GOOGLE_SUB=test-admin-sub\n"
+    private_env.write_bytes(original_env)
+    app.state.store.owner_env_path = private_env
+    bootstrap_id, _ = app.state.store.issue_owner_bootstrap(expires_minutes=10)
+
+    def fail_env_write(*_args):
+        raise OSError("simulated private env write failure")
+
+    monkeypatch.setattr(app.state.store, "_persist_owner_sub", fail_env_write)
+    with pytest.raises(OSError, match="simulated private env write failure"):
+        app.state.store._claim_owner_bootstrap(
+            bootstrap_id,
+            google_sub="verified-owner-google-sub",
+            email="owner@example.com",
+            email_verified=True,
+            display_name="Verified Owner",
+        )
+
+    assert private_env.read_bytes() == original_env
+    with app.state.store.connect() as db:
+        admin = db.execute("SELECT google_sub FROM users WHERE role='admin'").fetchone()
+        bootstrap = db.execute(
+            "SELECT status FROM owner_bootstraps WHERE id=?", (bootstrap_id,)
+        ).fetchone()
+    assert admin["google_sub"] == "test-admin-sub"
+    assert bootstrap["status"] == "active"
+
+
+def test_owner_bootstrap_commit_failure_restores_env_and_database(tmp_path, monkeypatch):
+    app = google_app(tmp_path)
+    private_env = tmp_path / ".env.local"
+    original_env = b"XV12_AUTH_MODE=google\nXV12_OWNER_GOOGLE_SUB=test-admin-sub\n"
+    private_env.write_bytes(original_env)
+    store = app.state.store
+    store.owner_env_path = private_env
+    bootstrap_id, _ = store.issue_owner_bootstrap(expires_minutes=10)
+    normal_connect = store.connect
+
+    @contextmanager
+    def fail_commit():
+        connection = sqlite3.connect(store.path, timeout=20)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        try:
+            yield connection
+            connection.rollback()
+            raise sqlite3.OperationalError("simulated commit failure")
+        finally:
+            connection.close()
+
+    monkeypatch.setattr(store, "connect", fail_commit)
+    with pytest.raises(sqlite3.OperationalError, match="simulated commit failure"):
+        store._claim_owner_bootstrap(
+            bootstrap_id,
+            google_sub="verified-owner-google-sub",
+            email="owner@example.com",
+            email_verified=True,
+            display_name="Verified Owner",
+        )
+    monkeypatch.setattr(store, "connect", normal_connect)
+
+    assert private_env.read_bytes() == original_env
+    with store.connect() as db:
+        admins = db.execute(
+            "SELECT google_sub FROM users WHERE role='admin' AND status='active'"
+        ).fetchall()
+        bootstrap = db.execute(
+            "SELECT status FROM owner_bootstraps WHERE id=?", (bootstrap_id,)
+        ).fetchone()
+    assert [row["google_sub"] for row in admins] == ["test-admin-sub"]
+    assert bootstrap["status"] == "active"
+
+
+def test_owner_bootstrap_rejects_identity_bound_to_another_user(tmp_path):
+    app = google_app(tmp_path)
+    private_env = tmp_path / ".env.local"
+    private_env.write_text(
+        "XV12_AUTH_MODE=google\nXV12_OWNER_GOOGLE_SUB=test-admin-sub\n",
+        encoding="utf-8",
+    )
+    store = app.state.store
+    store.owner_env_path = private_env
+    UserScopedStore.upsert_oidc_user(
+        store,
+        google_sub="already-bound-sub",
+        email="existing@example.com",
+        email_verified=True,
+        display_name="Existing User",
+    )
+    bootstrap_id, _ = store.issue_owner_bootstrap(expires_minutes=10)
+
+    with pytest.raises(OwnerBootstrapDenied, match="already bound"):
+        store._claim_owner_bootstrap(
+            bootstrap_id,
+            google_sub="already-bound-sub",
+            email="owner@example.com",
+            email_verified=True,
+            display_name="Verified Owner",
+        )
+
+    with store.connect() as db:
+        admins = db.execute(
+            "SELECT google_sub FROM users WHERE role='admin' AND status='active'"
+        ).fetchall()
+        bootstrap = db.execute(
+            "SELECT status FROM owner_bootstraps WHERE id=?", (bootstrap_id,)
+        ).fetchone()
+    assert [row["google_sub"] for row in admins] == ["test-admin-sub"]
+    assert bootstrap["status"] == "active"
 
 
 def test_invitation_token_is_stripped_before_google_redirect(tmp_path):
