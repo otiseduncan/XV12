@@ -72,6 +72,24 @@ The script verifies that XV12 listens only on loopback, preserves unrelated Serv
 8. If approval is required, no session is issued until the Owner selects **Approve**. Initial capability grants become effective at approval.
 9. The recipient can install the Android PWA from **Settings → Install XODUZ** or the browser's **Add to Home screen** command.
 
+## Android PWA identity (XODUZ vs Calibration IQ)
+
+XODUZ and Calibration IQ share the MagicDNS hostname (`omega.tailce2276.ts.net`) on different ports (`:8443` vs `:443`). Android Chrome often ignores the port when deciding whether a PWA is already installed, so an existing Calibration IQ install can suppress the XODUZ install prompt and only offer **Open Calibration IQ**.
+
+XODUZ declares a distinct web app manifest identity:
+
+- `id`: `xoduz-xv12`
+- `name` / `short_name`: `XODUZ`
+- `start_url`: `/?source=xoduz-pwa`
+
+That identity is independent of Calibration IQ. If Android still only offers Open Calibration IQ:
+
+1. Open the XODUZ Serve URL on port **8443** in Chrome (not the Calibration IQ URL).
+2. Use Chrome **⋮ → Install app** or **Add to Home screen** (not the Calibration IQ open action).
+3. If the menu still refuses a second install, remove the Calibration IQ home-screen app, install XODUZ from `:8443`, then reinstall Calibration IQ from `:443`.
+
+Do not use Tailscale Funnel. Separate hostnames remain the durable multi-PWA topology if Android continues to collapse port-distinct origins.
+
 Revoking a user disables their XV12 account, invalidates sessions, and removes capability grants. It does not pretend to remove accepted tailnet membership. Revoking an unused XV12 invitation also attempts to delete its matching Tailscale invite when one exists.
 
 ## Persistence and audit
