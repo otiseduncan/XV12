@@ -15,8 +15,33 @@ Add-Check 'model-alias' ($health.model.alias_ok -eq $true -and $health.model.exp
 Add-Check 'model-context' ([int]$health.model.context_tokens -eq 32768) ([string]$health.model.context_tokens)
 Add-Check 'sole-admin' ([int]$health.auth.admin_count -eq 1) ([string]$health.auth.admin_count)
 
+$authMode = [string]$health.auth.mode
+if ($authMode -ne 'test') {
+    throw @"
+Acceptance script requires controlled test identity mode (XV12_AUTH_MODE=test).
+Current mode: $authMode
+
+This script exercises sole-admin binding, multi-user memory isolation, and session
+revocation with the three fixed local personas (admin / user-a / user-b).
+
+To run acceptance against a live production Google stack:
+  1. Stop XODUZ (Stop-XODUZ.cmd)
+  2. In config/.env.local set XV12_AUTH_MODE=test (keep OWNER_GOOGLE_SUB)
+  3. Start XODUZ again
+  4. Re-run scripts\acceptance.ps1
+  5. Restore XV12_AUTH_MODE=google and restart when done
+
+For production Google-auth live checks use scripts\live_functional_acceptance.py
+after signing in through the UI, or the focused pytest packs (chat-core, web, auth).
+"@
+}
+
 $adminSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-$login = Invoke-RestMethod -Uri "$base/api/auth/test-login" -Method Post -ContentType 'application/json' -Body '{"persona":"admin"}' -WebSession $adminSession
+try {
+    $login = Invoke-RestMethod -Uri "$base/api/auth/test-login" -Method Post -ContentType 'application/json' -Body '{"persona":"admin"}' -WebSession $adminSession
+} catch {
+    throw "Test identity login failed while auth mode is '$authMode'. Ensure the backend was started with XV12_AUTH_MODE=test. $_"
+}
 Add-Check 'admin-binding' ($login.role -eq 'admin' -and $login.conversational_name -eq 'Otis') ([string]$login.conversational_name)
 Add-Check 'functional-registry' ($health.registry.version -eq $script:RuntimeConfig.versions.capability_registry -and $health.services.adas.status -eq 'available') ([string]$health.registry.version)
 $voiceDefault = Invoke-RestMethod -Uri "$base/api/settings/voice" -WebSession $adminSession

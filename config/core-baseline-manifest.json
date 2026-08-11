@@ -25,7 +25,23 @@
     "temperature": 0.35,
     "gpu_layers": 99,
     "parallel": 1,
-    "arguments": ["-m", "models/qwen3-coder-30b-a3b/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf", "--alias", "xoduz-qwen3-coder-30b", "--host", "127.0.0.1", "--port", "8121", "-c", "32768", "-ngl", "99", "--parallel", "1", "--no-webui"]
+    "arguments": [
+      "-m",
+      "models/qwen3-coder-30b-a3b/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+      "--alias",
+      "xoduz-qwen3-coder-30b",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8121",
+      "-c",
+      "32768",
+      "-ngl",
+      "99",
+      "--parallel",
+      "1",
+      "--no-webui"
+    ]
   },
   "identity_contract": {
     "version": "xoduz-identity-v1",
@@ -33,10 +49,10 @@
   },
   "protected_core": {
     "files": {
-      "app/assistant.py": "4334c88928e049622d75796c487a879231db5e677beb71565e7f24896badf80d",
+      "app/assistant.py": "09ed4230364a957fb0396bef1c36c57c289ad1e0adb2b585b72e143cec6ebf42",
       "app/model.py": "992e70dd85c28b8b60eb3c16e6c5a511bd1e639de740b199f44c82be65021e6d",
       "app/context.py": "39d306ba12a292377ed7a3a23bc21529a7269cb296bddbf69c30097160299233",
-      "app/auth.py": "fae2cc2d820bc577581a5b169aa04795ff9ab9e5d4b05ee40db84a1bc2a83b16",
+      "app/auth.py": "3f3cf02abd82f657940684b57e11e37e2484ecdd0a5a5a87ec37dabc61161400",
       "app/database.py": "0049b82b5cd39f63e51ee8eb68213e47e4a010010bc8c3df9109383c02357fc9"
     },
     "main_stream_chat_sha256": "220da87b99f632503ab67ff057f70aff71c33febdfa21abcb10bcc67f5b2ded0",
@@ -45,7 +61,27 @@
       "model_tools": "(self, user: 'dict[str, Any]') -> 'list[dict[str, Any]]'",
       "register": "(self, capability_id: 'str', handler: 'Callable[[dict[str, Any]], Any]') -> 'None'",
       "execute": "(self, capability_id: 'str', user: 'dict[str, Any]', arguments: 'dict[str, Any]') -> 'tuple[Any, AuthorizationDecision]'"
-    }
+    },
+    "intentional_core_evolution": [
+      {
+        "files": [
+          "app/assistant.py"
+        ],
+        "commits": [
+          "43ec13a"
+        ],
+        "reason": "Deterministic live-current routing: high-confidence freshness requests force authorized web.current.search before model synthesis and guard false no-live-access replies."
+      },
+      {
+        "files": [
+          "app/auth.py"
+        ],
+        "commits": [
+          "99471ed"
+        ],
+        "reason": "Bounded five-second JWT leeway for Google iat clock skew without weakening signature/audience/issuer/expiry checks."
+      }
+    ]
   },
   "versions": {
     "database_schema": 3,
@@ -56,11 +92,25 @@
   },
   "acceptance": {
     "result": "PASS",
-    "focused_packs": ["chat-core", "auth", "memory-isolation", "context", "model-runtime", "user-identity", "registry-gateway"],
+    "focused_packs": [
+      "chat-core",
+      "auth",
+      "memory-isolation",
+      "context",
+      "model-runtime",
+      "user-identity",
+      "registry-gateway"
+    ],
     "production_turns": 4,
     "persisted_messages": 8,
-    "first_token_seconds": {"minimum": 0.309, "maximum": 0.577},
-    "service_ports": {"backend": 8120, "model": 8121},
+    "first_token_seconds": {
+      "minimum": 0.309,
+      "maximum": 0.577
+    },
+    "service_ports": {
+      "backend": 8120,
+      "model": 8121
+    },
     "standalone_audit": "PASS"
   },
   "backup": {
