@@ -32,6 +32,7 @@ jobs:
           tests/test_permissions.py
           tests/test_artifacts.py
           tests/test_functional_assistant.py
+          tests/test_current_information.py
           tests/test_chat_core.py
           tests/test_memory_context.py
           tests/test_model_compat.py
