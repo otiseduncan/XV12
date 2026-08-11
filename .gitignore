@@ -4,6 +4,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.codex-remote-attachments/
 .coverage
 htmlcov/
 node_modules/

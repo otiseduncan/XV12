@@ -2,7 +2,8 @@
   "application": {
     "name": "XODUZ XV12",
     "host": "127.0.0.1",
-    "port": 8120
+    "port": 8120,
+    "startup_timeout_seconds": 60
   },
   "model": {
     "alias": "xoduz-qwen3-coder-30b",

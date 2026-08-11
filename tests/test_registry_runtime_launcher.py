@@ -56,8 +56,9 @@ def test_runtime_configuration_uses_only_xv12_relative_paths():
 @pytest.mark.launcher
 def test_optional_comfyui_failure_cannot_block_core_launcher():
     script = (ROOT / "scripts" / "start-xv12.ps1").read_text(encoding="utf-8")
-    assert "try {\n        & \"$PSScriptRoot\\xv12-comfyui.ps1\" -Action Ensure\n    } catch {" in script
-    assert "OPTIONAL MEDIA WARNING: ComfyUI startup failed:" in script
+    assert '& "$PSScriptRoot\\xv12-comfyui.ps1" -Action Ensure' in script
+    assert "} catch {" in script
+    assert "OPTIONAL COMFYUI WARNING: unavailable; continuing required core startup." in script
     assert "throw 'XV12 started but the configured ComfyUI provider health contract did not pass.'" not in script
 
 
