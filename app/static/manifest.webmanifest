@@ -1,16 +1,40 @@
 {
-  "id": "/",
-  "name": "XODUZ XV12",
+  "id": "xoduz-xv12",
+  "name": "XODUZ",
   "short_name": "XODUZ",
-  "description": "Private, local, model-first XODUZ assistant",
-  "start_url": "/",
+  "description": "Private, local, model-first XODUZ assistant on XV12",
+  "start_url": "/?source=xoduz-pwa",
   "scope": "/",
   "display": "standalone",
   "background_color": "#080b12",
   "theme_color": "#071014",
   "orientation": "any",
+  "lang": "en",
+  "categories": ["productivity", "utilities"],
   "icons": [
-    { "src": "/static/icons/xoduz-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "/static/icons/xoduz-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    {
+      "src": "/static/icons/xoduz-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/xoduz-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/xoduz-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/static/icons/xoduz-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }

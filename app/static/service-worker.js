@@ -1,7 +1,8 @@
-const CACHE = "xoduz-shell-v2";
+const CACHE = "xoduz-shell-v3";
 const SHELL = [
-  "/static/styles.css?v=4.1.0",
-  "/static/app.js?v=4.1.0",
+  "/static/styles.css?v=4.1.1",
+  "/static/app.js?v=4.1.1",
+  "/static/manifest.webmanifest?v=xoduz-xv12",
   "/static/icons/xoduz-192.png",
   "/static/icons/xoduz-512.png",
   "/assets/avatar/xoduz-512.png",
