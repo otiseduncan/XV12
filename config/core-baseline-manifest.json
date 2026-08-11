@@ -49,10 +49,10 @@
   },
   "protected_core": {
     "files": {
-      "app/assistant.py": "09ed4230364a957fb0396bef1c36c57c289ad1e0adb2b585b72e143cec6ebf42",
+      "app/assistant.py": "84e46234fcfdda74014899a53acf3ec7550df6d8743fd436c0fa7b8546017d8d",
       "app/model.py": "992e70dd85c28b8b60eb3c16e6c5a511bd1e639de740b199f44c82be65021e6d",
       "app/context.py": "39d306ba12a292377ed7a3a23bc21529a7269cb296bddbf69c30097160299233",
-      "app/auth.py": "3f3cf02abd82f657940684b57e11e37e2484ecdd0a5a5a87ec37dabc61161400",
+      "app/auth.py": "7fc43d5521ab1fdad0af08e6bbecc9d2c71cb7d892f297dd6721956dc57caa20",
       "app/database.py": "0049b82b5cd39f63e51ee8eb68213e47e4a010010bc8c3df9109383c02357fc9"
     },
     "main_stream_chat_sha256": "220da87b99f632503ab67ff057f70aff71c33febdfa21abcb10bcc67f5b2ded0",
@@ -81,7 +81,8 @@
         ],
         "reason": "Bounded five-second JWT leeway for Google iat clock skew without weakening signature/audience/issuer/expiry checks."
       }
-    ]
+    ],
+    "hash_notes": "Protected core hashes are measured from the Windows operator working tree. Recently edited core files (app/assistant.py, app/auth.py) use CRLF on disk; unchanged core files remain LF and keep their original freeze hashes."
   },
   "versions": {
     "database_schema": 3,
