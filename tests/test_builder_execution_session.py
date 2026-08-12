@@ -30,6 +30,17 @@ def call(client: TestClient, capability_id: str, **arguments: Any) -> dict[str, 
     return response.json()["result"]
 
 
+def review_verdict_response(messages: list[dict[str, Any]]) -> str:
+    """Shared mock-model verdict for both acceptance review and quality critique calls.
+    A real model sees a different system prompt per call and answers each on its own
+    terms; these mocks branch on that same system-prompt content rather than returning
+    one hardcoded shape for both calls."""
+    system = str((messages[0] if messages else {}).get("content") or "")
+    if "quality and architecture critic" in system:
+        return '{"acceptable":true,"issues":[]}'
+    return '{"satisfied":true,"missing":[]}'
+
+
 def wait_job(client: TestClient, job_id: str, timeout: float = 15) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -51,7 +62,7 @@ class ModelDirectedBuilder:
         return {"reachable": True, "alias_ok": True, "models": ["xoduz-qwen3-coder-30b"]}
 
     async def complete(self, _messages: list[dict[str, Any]], max_tokens: int = 320) -> str:
-        return '{"satisfied":true,"missing":[]}'
+        return review_verdict_response(_messages)
 
     async def stream_events(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,
@@ -101,7 +112,7 @@ class ContinuationBuilder:
         self.round = 0
 
     async def complete(self, _messages, max_tokens=320):
-        return '{"satisfied":true,"missing":[]}'
+        return review_verdict_response(_messages)
 
     async def stream_events(self, _messages, tools=None):
         rounds = [
@@ -268,6 +279,74 @@ def test_same_model_requirement_review_returns_concrete_missing_items():
     assert satisfied is False
     assert missing == ["Featured collection section is absent"]
     assert "must be present in the final Chromium-visible text" in reviewer.reviewed_messages[0]["content"]
+
+
+def test_quality_critique_returns_concrete_issues_and_sees_diff_context():
+    class Critic:
+        reviewed_messages = None
+
+        async def complete(self, _messages, max_tokens=512):
+            self.reviewed_messages = _messages
+            return json.dumps({
+                "acceptable": False,
+                "issues": [{
+                    "type": "duplication", "severity": "medium",
+                    "finding": "Two copies of the same validator", "recommended_repair": "Extract a shared helper",
+                }],
+            })
+
+    critic = Critic()
+    acceptable, issues = asyncio.run(BuilderExecutionService._review_quality(
+        critic, {"original_request": "Add input validation"},
+        BuilderEvidence(workspace_id="workspace", browser_title="Store", browser_body_text="Validated"),
+        {"change_scope": "targeted_change"},
+        "--- app.js ---\nfunction validate(x) { /* duplicated in utils.js */ }",
+    ))
+    assert acceptable is False
+    assert issues == [{
+        "type": "duplication", "severity": "medium",
+        "finding": "Two copies of the same validator", "recommended_repair": "Extract a shared helper",
+    }]
+    assert "quality and architecture critic" in critic.reviewed_messages[0]["content"]
+    assert "app.js" in critic.reviewed_messages[1]["content"]
+
+
+def test_diff_context_reads_changed_file_content_not_a_git_diff():
+    class FakeWorkspaces:
+        def read(self, arguments, _user):
+            return {"status": "success", "path": arguments["path"], "content": f"content of {arguments['path']}"}
+
+    service = BuilderExecutionService(
+        store=None, jobs=None, workspaces=FakeWorkspaces(), previews=None, artifacts=None,
+        model_provider=lambda: None, registry=None, gateway=None,
+    )
+    context = service._build_diff_context("workspace", {"id": "user"}, ["app.js", "index.html"])
+    assert "content of app.js" in context
+    assert "content of index.html" in context
+
+
+def test_oversized_style_telemetry_is_bounded_without_collapsing_inspect_result():
+    elements = [{"sel": f"div.card-{index}", "bg": "rgba(255, 255, 255, 0.92)", "pad": "24px"} for index in range(400)]
+    result = BuilderExecutionService._bounded_result("browser.preview.inspect", {
+        "status": "success", "rendered": True, "healthy": True,
+        "style_telemetry": {"viewport": {"w": 1440, "h": 1000}, "elements": elements},
+    })
+    assert result.get("rendered") is True and result.get("healthy") is True
+    assert "bounded_observation" not in result
+    telemetry = result["style_telemetry"]
+    assert telemetry["elements_truncated"] is True
+    assert 0 < len(telemetry["elements"]) < 400
+    assert telemetry["viewport"] == {"w": 1440, "h": 1000}
+
+
+def test_observe_captures_style_telemetry_for_the_quality_critique():
+    evidence = BuilderEvidence(workspace_id="workspace")
+    BuilderExecutionService._observe("browser.preview.inspect", {
+        "status": "success", "rendered": True, "healthy": True,
+        "style_telemetry": {"viewport": {"w": 1440, "h": 1000}, "elements": [{"sel": "main", "bg": "rgb(6, 19, 24)"}]},
+    }, evidence)
+    assert evidence.browser_healthy is True
+    assert "rgb(6, 19, 24)" in evidence.style_telemetry
 
 
 def test_builder_continuation_reuses_workspace_preview_and_artifact(app, client):

@@ -1,5 +1,5 @@
 {
-  "registry_version": "4.1.0",
+  "registry_version": "4.2.0",
   "capabilities": [
     {
       "id": "system.health.read", "family": "system",
@@ -223,6 +223,18 @@
       "supported_scopes": ["write", "modify"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write", "modify"], "user": ["write", "modify"]}, "timeout_seconds": 30, "health": "available", "execution_environment": "managed-builder-workspaces", "idempotency": "atomic-batch"
     },
     {
+      "id": "builder.code.search", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Bounded workspace-only code search across an owned Builder workspace for literal text, regex, or filenames. Returns compact path/line/match results without consuming a sandbox operation.", "version": "1.0.0", "risk_tier": 0, "model_exposed": false, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id", "query"], "properties": {"workspace_id": {"type": "string"}, "query": {"type": "string", "minLength": 1, "maxLength": 500}, "mode": {"type": "string", "enum": ["text", "regex", "filename"]}, "path_glob": {"type": "string", "maxLength": 200}, "limit": {"type": "integer", "minimum": 1, "maximum": 60}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 10, "health": "available", "execution_environment": "managed-builder-workspaces", "idempotency": "safe"
+    },
+    {
+      "id": "builder.code.map", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Return a compact project map of an owned Builder workspace: manifests, likely entry points, source directories, tests, styles, routing files, component directories, and a bounded import/export sample. Not a semantic index; a cheap orientation tool.", "version": "1.0.0", "risk_tier": 0, "model_exposed": false, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "required": ["workspace_id"], "properties": {"workspace_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]}, "timeout_seconds": 10, "health": "available", "execution_environment": "managed-builder-workspaces", "idempotency": "safe"
+    },
+    {
       "id": "builder.sandbox.exec", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
       "description": "Run a bounded argv command in the isolated Docker Builder sandbox for dependency installs, builds, migrations, or tests. Host shell access is never provided.", "version": "1.0.0", "risk_tier": 1, "model_exposed": false, "authorization": {"roles": ["admin", "user"]},
       "arguments_schema": {"type": "object", "required": ["workspace_id", "argv"], "properties": {"workspace_id": {"type": "string"}, "argv": {"type": "array"}, "network": {"type": "boolean"}, "secret_refs": {"type": "array"}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 900}, "report_type": {"type": "string", "enum": ["build_report", "test_report"]}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
@@ -263,6 +275,12 @@
       "description": "Create a downloadable project archive artifact while excluding Git history, dependencies, environment files, and secrets.", "version": "1.0.0", "risk_tier": 1, "model_exposed": false, "authorization": {"roles": ["admin", "user"]},
       "arguments_schema": {"type": "object", "required": ["workspace_id"], "properties": {"workspace_id": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
       "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 60, "health": "available", "execution_environment": "managed-builder-workspaces", "idempotency": "creates-artifact"
+    },
+    {
+      "id": "builder.task_state.update", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
+      "description": "Update the durable engineering TaskState for this Builder session: goal, requirements, constraints, architecture notes, plan, completed items, open items, and next action. Deterministic fields (changed files, failures, validation) are tracked automatically by the platform and are not set here.", "version": "1.0.0", "risk_tier": 0, "model_exposed": false, "authorization": {"roles": ["admin", "user"]},
+      "arguments_schema": {"type": "object", "properties": {"session_id": {"type": "string"}, "goal": {"type": "string", "maxLength": 1200}, "change_scope": {"type": "string", "enum": ["targeted_change", "substantial_change"]}, "requirements": {"type": "array"}, "constraints": {"type": "array"}, "architecture": {"type": "object"}, "plan": {"type": "array"}, "completed": {"type": "array"}, "open_items": {"type": "array"}, "next_action": {"type": "string", "maxLength": 1200}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]}, "timeout_seconds": 5, "health": "available", "execution_environment": "durable-model-directed-builder", "idempotency": "safe"
     },
     {
       "id": "git.status", "family": "git", "family_label": "Git", "family_description": "Repository inspection and authorized source-control operations inside managed workspaces.",

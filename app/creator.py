@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import fnmatch
 import hashlib
 import html
 import json
@@ -33,7 +34,7 @@ from fastapi.responses import Response
 
 from .artifacts import ArtifactStore, active_conversation_id
 from .auth import current_user
-from .builder_execution import BuilderExecutionService
+from .builder_execution import BuilderExecutionService, parse_task_state
 from .comfyui import ComfyUIConfig, ComfyUIProvider
 
 
@@ -122,6 +123,9 @@ class CreatorStore:
             preview_columns = {str(row["name"]) for row in db.execute("PRAGMA table_info(creator_previews)").fetchall()}
             if "access_token" not in preview_columns:
                 db.execute("ALTER TABLE creator_previews ADD COLUMN access_token TEXT NOT NULL DEFAULT ''")
+            session_columns = {str(row["name"]) for row in db.execute("PRAGMA table_info(builder_execution_sessions)").fetchall()}
+            if "task_state_json" not in session_columns:
+                db.execute("ALTER TABLE builder_execution_sessions ADD COLUMN task_state_json TEXT NOT NULL DEFAULT ''")
             db.execute(
                 """UPDATE creator_jobs SET state='failed',progress=100,error_code='service_restarted',
                    message='The creator service restarted before this job finished.',completed_at=?,updated_at=?
@@ -316,7 +320,7 @@ class CreatorStore:
         allowed = {
             "status", "stage", "job_id", "operation_count", "model_rounds", "repair_cycles",
             "browser_cycles", "elapsed_seconds", "generated_context_size", "latest_observation_json",
-            "preview_id", "artifact_id",
+            "preview_id", "artifact_id", "task_state_json",
         }
         updates = {key: value for key, value in changes.items() if key in allowed}
         if not updates:
@@ -338,6 +342,7 @@ class CreatorStore:
             "elapsed_seconds": float(item.get("elapsed_seconds") or 0),
             "generated_context_size": int(item.get("generated_context_size") or 0),
             "preview_id": item.get("preview_id") or None, "artifact_id": item.get("artifact_id") or None,
+            "task_state": parse_task_state(item.get("task_state_json")),
             "updated_at": item.get("updated_at"),
         }
 
@@ -526,6 +531,173 @@ class WorkspaceService:
             raise
         return {"status": "success", "atomic": True, "files_written": len(targets), "bytes_written": total,
                 "paths": [relative for _, relative, _ in targets]}
+
+    _CODE_SEARCH_IGNORED_DIRS = {".git", "node_modules", ".creator-deps", ".xv12-artifacts", "__pycache__", ".pytest_cache", "dist", "build"}
+    _CODE_SEARCH_MAX_FILE_BYTES = 750_000
+    _CODE_SEARCH_MAX_FILES_SCANNED = 4000
+    _CODE_SEARCH_LINE_CHARS = 200
+
+    def code_search(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        """Bounded workspace-only search for text, regex, or filenames. Deliberately a plain
+        Python scan rather than a subprocess/ripgrep dependency, matching how inspect()/archive()
+        already walk the workspace tree in-process. Cheap and intentional, not a semantic index."""
+        workspace_id = str(arguments["workspace_id"])
+        query = str(arguments.get("query") or "").strip()
+        if not query:
+            raise ValueError("A search query is required.")
+        mode = str(arguments.get("mode") or "text")
+        if mode not in {"text", "regex", "filename"}:
+            raise ValueError("mode must be text, regex, or filename.")
+        limit = max(1, min(int(arguments.get("limit") or 25), 60))
+        path_glob = str(arguments.get("path_glob") or "").strip()
+        root = self.store.safe_path(workspace_id, user["id"], ".", must_exist=True)
+
+        pattern: re.Pattern[str] | None = None
+        if mode == "regex":
+            try:
+                pattern = re.compile(query)
+            except re.error as error:
+                raise ValueError(f"Invalid regular expression: {error}") from error
+
+        matches: list[dict[str, Any]] = []
+        files_scanned = 0
+        for path in sorted(root.rglob("*")):
+            if len(matches) >= limit or files_scanned >= self._CODE_SEARCH_MAX_FILES_SCANNED:
+                break
+            if not path.is_file():
+                continue
+            relative = path.relative_to(root)
+            if any(part in self._CODE_SEARCH_IGNORED_DIRS for part in relative.parts):
+                continue
+            rel_posix = relative.as_posix()
+            if path_glob and not fnmatch.fnmatch(rel_posix, path_glob):
+                continue
+            if mode == "filename":
+                files_scanned += 1
+                if query.casefold() in rel_posix.casefold():
+                    matches.append({"path": rel_posix, "line": 0, "text": rel_posix})
+                continue
+            try:
+                if path.stat().st_size > self._CODE_SEARCH_MAX_FILE_BYTES:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            files_scanned += 1
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                hit = bool(pattern.search(line)) if pattern else (query.casefold() in line.casefold())
+                if not hit:
+                    continue
+                matches.append({"path": rel_posix, "line": line_number, "text": line.strip()[: self._CODE_SEARCH_LINE_CHARS]})
+                if len(matches) >= limit:
+                    break
+        return {
+            "status": "success" if matches else "no_result",
+            "query": query, "mode": mode, "matches": matches, "match_count": len(matches),
+            "files_scanned": files_scanned, "truncated": len(matches) >= limit,
+        }
+
+    _CODE_MAP_IGNORED_DIRS = {".git", "node_modules", ".creator-deps", ".xv12-artifacts", "__pycache__", ".pytest_cache", "dist", "build", ".next", ".venv"}
+    _CODE_MAP_SOURCE_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".vue", ".svelte"}
+    _CODE_MAP_STYLE_SUFFIXES = {".css", ".scss", ".less"}
+    _CODE_MAP_CONFIG_NAMES = {
+        "package.json", "requirements.txt", "requirements-dev.txt", "pyproject.toml", "Dockerfile",
+        "docker-compose.yml", "tsconfig.json", "vite.config.js", "vite.config.ts", "webpack.config.js",
+        ".env.example", "next.config.js", "tailwind.config.js",
+    }
+    _CODE_MAP_ENTRY_NAMES = {
+        "main.py", "app.py", "wsgi.py", "asgi.py", "__init__.py", "index.js", "index.ts",
+        "index.html", "server.js", "app.js", "App.jsx", "App.tsx", "main.js", "main.ts",
+    }
+    _CODE_MAP_MAX_FILES = 4000
+    _CODE_MAP_MAX_LIST = 40
+    _CODE_MAP_IMPORT_SAMPLE_FILES = 20
+    _CODE_MAP_IMPORT_SAMPLE_TOTAL = 120
+    _CODE_MAP_IMPORT_LINE_RE = re.compile(
+        r'^\s*(?:import\s+.+|from\s+\S+\s+import\s+.+|export\s+.+from\s+["\'].+["\'])', re.MULTILINE,
+    )
+
+    def code_map(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        """Compact, cheap project map: manifests, likely entry points, source/component
+        directories, tests, styles, routing files, and a bounded import/export sample.
+        Deliberately simple -- not a semantic index or LSP; add that only if evidence shows
+        this bounded scan is insufficient for orientation."""
+        workspace_id = str(arguments["workspace_id"])
+        root = self.store.safe_path(workspace_id, user["id"], ".", must_exist=True)
+
+        manifests: list[str] = []
+        entry_points: list[str] = []
+        tests: list[str] = []
+        styles: list[str] = []
+        routing: list[str] = []
+        component_dirs: set[str] = set()
+        source_dirs: set[str] = set()
+        import_samples: list[dict[str, str]] = []
+        files_import_scanned = 0
+        total_files = 0
+
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(root)
+            if any(part in self._CODE_MAP_IGNORED_DIRS for part in relative.parts):
+                continue
+            total_files += 1
+            if total_files > self._CODE_MAP_MAX_FILES:
+                break
+            rel_posix = relative.as_posix()
+            name = path.name
+            suffix = path.suffix.casefold()
+            lowered = rel_posix.casefold()
+
+            if name in self._CODE_MAP_CONFIG_NAMES and len(manifests) < self._CODE_MAP_MAX_LIST:
+                manifests.append(rel_posix)
+            if name in self._CODE_MAP_ENTRY_NAMES and len(entry_points) < self._CODE_MAP_MAX_LIST:
+                entry_points.append(rel_posix)
+            if "test" in lowered and len(tests) < self._CODE_MAP_MAX_LIST:
+                tests.append(rel_posix)
+            if suffix in self._CODE_MAP_STYLE_SUFFIXES and len(styles) < self._CODE_MAP_MAX_LIST:
+                styles.append(rel_posix)
+            if ("route" in lowered or "router" in lowered) and len(routing) < self._CODE_MAP_MAX_LIST:
+                routing.append(rel_posix)
+            if "components" in relative.parts:
+                index = relative.parts.index("components")
+                component_dirs.add(Path(*relative.parts[: index + 1]).as_posix())
+            if suffix in self._CODE_MAP_SOURCE_SUFFIXES and len(relative.parts) > 1:
+                source_dirs.add(relative.parts[0])
+
+            if (
+                suffix in self._CODE_MAP_SOURCE_SUFFIXES
+                and files_import_scanned < self._CODE_MAP_IMPORT_SAMPLE_FILES
+                and len(import_samples) < self._CODE_MAP_IMPORT_SAMPLE_TOTAL
+            ):
+                try:
+                    if path.stat().st_size <= 200_000:
+                        text = path.read_text(encoding="utf-8", errors="replace")
+                        files_import_scanned += 1
+                        found = 0
+                        for match in self._CODE_MAP_IMPORT_LINE_RE.finditer(text):
+                            if found >= 6 or len(import_samples) >= self._CODE_MAP_IMPORT_SAMPLE_TOTAL:
+                                break
+                            import_samples.append({"path": rel_posix, "statement": match.group(0).strip()[:160]})
+                            found += 1
+                except OSError:
+                    pass
+
+        return {
+            "status": "success",
+            "workspace_id": workspace_id,
+            "manifests": manifests,
+            "entry_points": entry_points,
+            "source_dirs": sorted(source_dirs)[: self._CODE_MAP_MAX_LIST],
+            "component_dirs": sorted(component_dirs)[: self._CODE_MAP_MAX_LIST],
+            "test_files": tests,
+            "style_files": styles,
+            "routing_files": routing,
+            "import_export_samples": import_samples,
+            "files_scanned": min(total_files, self._CODE_MAP_MAX_FILES),
+            "truncated": total_files > self._CODE_MAP_MAX_FILES,
+        }
 
     def archive(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         workspace_id = str(arguments["workspace_id"])
@@ -749,6 +921,49 @@ class BrowserService:
             raise ValueError("Browser validation is limited to managed local previews.")
         return preview, str(preview["url"])
 
+    # Per-visible-element computed-style telemetry, evaluated inside Chromium after the
+    # document snapshot. Bounded (element cap, sliced strings) and fail-soft: the JS returns
+    # {error} on any throw, and default-valued keys are omitted entirely to keep the payload
+    # compact -- see defaults_omitted in the returned object for the convention.
+    _STYLE_TELEMETRY_JS = """(()=>{try{
+const out=[];const vw=innerWidth,vh=innerHeight;const skip={SCRIPT:1,STYLE:1,LINK:1,META:1,NOSCRIPT:1,TEMPLATE:1};
+for(const el of document.querySelectorAll('body, body *')){
+ if(out.length>=80)break;
+ if(skip[el.tagName])continue;
+ const cs=getComputedStyle(el);
+ if(cs.display==='none'||cs.visibility==='hidden')continue;
+ const r=el.getBoundingClientRect();
+ if(r.width<2||r.height<2)continue;
+ const sel=(el.tagName.toLowerCase()+(el.id?'#'+el.id:'')+(el.classList.length?'.'+[...el.classList].slice(0,3).join('.'):'')).slice(0,120);
+ let covered;
+ if(r.top<vh&&r.bottom>0&&r.left<vw&&r.right>0){
+  const hit=document.elementFromPoint(Math.max(0,Math.min(vw-1,r.left+r.width/2)),Math.max(0,Math.min(vh-1,r.top+r.height/2)));
+  if(hit&&hit!==el&&!el.contains(hit)&&!hit.contains(el))covered=true;
+ }
+ const item={sel,rect:{x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)},
+  bg:cs.backgroundColor,color:cs.color,
+  font:{family:cs.fontFamily.slice(0,60),size:cs.fontSize,weight:cs.fontWeight,lineHeight:cs.lineHeight},
+  pad:cs.padding,margin:cs.margin,display:cs.display,
+  border:(cs.border||cs.borderTopWidth+' '+cs.borderTopStyle+' '+cs.borderTopColor).slice(0,80)};
+ if(cs.backdropFilter&&cs.backdropFilter!=='none')item.backdrop=cs.backdropFilter.slice(0,80);
+ if(cs.boxShadow!=='none')item.shadow=cs.boxShadow.slice(0,120);
+ if(cs.borderRadius!=='0px')item.radius=cs.borderRadius.slice(0,60);
+ if(cs.display.includes('flex'))item.flex={dir:cs.flexDirection,justify:cs.justifyContent,align:cs.alignItems,wrap:cs.flexWrap};
+ if(cs.display.includes('grid'))item.grid={cols:cs.gridTemplateColumns.slice(0,120),rows:cs.gridTemplateRows.slice(0,120)};
+ if(cs.gap!=='normal'&&cs.gap!=='0px')item.gap=cs.gap;
+ if(cs.overflow!=='visible')item.overflow=cs.overflow;
+ if(cs.zIndex!=='auto')item.z=cs.zIndex;
+ if(r.right<0||r.bottom<0||r.left>vw||r.top>vh)item.offscreen=true;
+ else if(r.left<-1||r.top<-1||r.right>vw+1)item.clipped=true;
+ if(covered)item.covered=true;
+ out.push(item);
+}
+return{viewport:{w:vw,h:vh,scrollW:document.documentElement.scrollWidth,scrollH:document.documentElement.scrollHeight,
+ horizontalOverflow:document.documentElement.scrollWidth>vw},
+ defaults_omitted:'backdrop=none shadow=none radius=0px gap=0 overflow=visible z=auto offscreen/clipped/covered=false',
+ elements:out};
+}catch(e){return{error:String(e).slice(0,300)}}})()"""
+
     @staticmethod
     def _collect_devtools(websocket_url: str, url: str, click_selector: str = "") -> dict[str, Any]:
         async def collect() -> dict[str, Any]:
@@ -814,8 +1029,18 @@ class BrowserService:
                 expression = "(()=>({title:document.title,body:(document.body?.innerText||'').slice(0,3000),dom:document.documentElement?.outerHTML||''}))()"
                 response = await command("Runtime.evaluate", {"expression": expression, "returnByValue": True})
                 document = (((response.get("result") or {}).get("result") or {}).get("value")) or {}
+                # Strictly additive: a telemetry failure must never invalidate the
+                # DOM/console/network evidence already collected above.
+                try:
+                    response = await command("Runtime.evaluate", {"expression": BrowserService._STYLE_TELEMETRY_JS, "returnByValue": True})
+                    telemetry = (((response.get("result") or {}).get("result") or {}).get("value")) or {}
+                    if not isinstance(telemetry, dict):
+                        telemetry = {"error": "style telemetry returned a non-object value"}
+                except Exception as error:
+                    telemetry = {"error": f"style telemetry unavailable: {str(error)[:200]}"}
             return {"document": document, "console": console[:50], "runtime_errors": runtime_errors[:25],
-                    "network_failures": network_failures[:50], "click_performed": click_result}
+                    "network_failures": network_failures[:50], "click_performed": click_result,
+                    "style_telemetry": telemetry}
 
         return asyncio.run(collect())
 
@@ -870,6 +1095,7 @@ class BrowserService:
                 "dom_bytes": len(dom.encode()), "rendered": bool(dom), "console": evidence["console"],
                 "runtime_errors": evidence["runtime_errors"], "network_failures": evidence["network_failures"],
                 "console_inspected": True, "network_inspected": True, "click_performed": evidence["click_performed"],
+                "style_telemetry": evidence.get("style_telemetry") or {},
                 "healthy": not evidence["runtime_errors"] and not evidence["network_failures"] and not any(item.get("level") == "error" for item in evidence["console"])}
 
     def inspect(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
@@ -1203,14 +1429,25 @@ class CreatorPlatform:
             return {"status": "unavailable", "message": "Builder execution service is not configured."}
         return self.builder_execution.execute(arguments, user)
 
+    def update_task_state(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        if not self.builder_execution:
+            return {"status": "unavailable", "message": "Builder execution service is not configured."}
+        session_id = str(arguments.get("session_id") or "")
+        if not session_id:
+            return {"status": "invalid_arguments", "message": "A Builder session ID is required."}
+        patch = {key: value for key, value in arguments.items() if key != "session_id"}
+        return self.builder_execution.task_state.update(session_id, user, patch)
+
     def register(self, gateway: Any) -> None:
         handlers = {
             "job.status": self.job_status, "job.cancel": self.job_cancel,
             "secrets.reference.configure": self.secrets.configure, "secrets.reference.status": self.secrets.status,
             "builder.workspace.create": self.workspaces.create, "builder.workspace.open": self.workspaces.open,
             "builder.session.execute": self.execute_builder_session,
+            "builder.task_state.update": self.update_task_state,
             "builder.workspace.inspect": self.workspaces.inspect, "builder.files.read": self.workspaces.read,
             "builder.files.patch": self.workspaces.patch, "builder.files.batch": self.workspaces.batch,
+            "builder.code.search": self.workspaces.code_search, "builder.code.map": self.workspaces.code_map,
             "builder.project.archive": self.workspaces.archive, "builder.sandbox.exec": self.sandbox.execute,
             "builder.preview.start": self.previews.start, "builder.preview.status": self.previews.status,
             "builder.preview.stop": self.previews.stop, "browser.preview.inspect": self.browser.inspect,

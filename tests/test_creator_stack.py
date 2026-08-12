@@ -198,6 +198,14 @@ def test_browser_devtools_reports_console_runtime_network_and_click_evidence(cli
         assert any("runtime proof" in item for item in inspected["runtime_errors"])
         assert any(item.get("status") == 404 or "missing" in item.get("url", "") for item in inspected["network_failures"])
         assert inspected["healthy"] is False
+        telemetry = inspected["style_telemetry"]
+        assert "error" not in telemetry, telemetry
+        assert telemetry["viewport"]["w"] > 0 and telemetry["viewport"]["h"] > 0
+        selectors = {item["sel"] for item in telemetry["elements"]}
+        assert "button#change" in selectors and "output#state" in selectors
+        button = next(item for item in telemetry["elements"] if item["sel"] == "button#change")
+        assert button["rect"]["w"] > 0 and button["rect"]["h"] > 0
+        assert button["font"]["size"].endswith("px") and button["bg"].startswith("rgb")
     finally:
         call(client, "builder.preview.stop", preview_id=preview["preview"]["id"])
 
