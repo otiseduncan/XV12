@@ -481,8 +481,8 @@ def test_pwa_manifest_icons_and_service_worker_are_private_data_safe(tmp_path):
         worker_response = client.get("/service-worker.js")
         assert worker_response.headers["service-worker-allowed"] == "/"
         worker = worker_response.text
-        assert 'const CACHE = "xoduz-shell-v2"' in worker
-        assert '"/static/app.js?v=4.1.0"' in worker
+        assert 'const CACHE = "xoduz-shell-v3"' in worker
+        assert '"/static/app.js?v=4.1.1"' in worker
         assert 'url.pathname.startsWith("/api/")' in worker
         assert 'url.pathname.startsWith("/onboard/")' in worker
         assert client.get("/static/icons/xoduz-192.png").headers["content-type"] == "image/png"
