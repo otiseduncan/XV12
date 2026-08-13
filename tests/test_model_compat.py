@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 
 import pytest
@@ -99,3 +100,67 @@ def test_compatibility_stream_preserves_long_tool_name_across_small_chunks() -> 
     assert visible == "Starting.\n"
     assert calls[0]["name"] == "builder_session_execute"
     assert calls[0]["arguments"] == '{"request": "Build a site"}'
+
+
+def test_native_engineering_call_cannot_broaden_explicit_windows_target_to_drive_root() -> None:
+    class NativeToolModel:
+        async def stream_events(self, messages, tools=None) -> AsyncIterator[dict]:
+            yield {
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "engineering_repo_map",
+                "arguments": json.dumps({"path": "X:\\"}),
+            }
+
+    async def collect() -> list[dict]:
+        model = ToolCallCompatibilityModel(NativeToolModel())
+        return [event async for event in model.stream_events(
+            [{"role": "user", "content": r"X:\XV12 Examine this directory as senior AI engineer."}],
+            tools=[{"function": {"name": "engineering_repo_map"}}],
+        )]
+
+    events = asyncio.run(collect())
+    assert len(events) == 1 and events[0]["type"] == "tool_call"
+    assert json.loads(events[0]["arguments"])["path"] == r"X:\XV12"
+
+
+def test_textual_engineering_fallback_cannot_broaden_explicit_windows_target_to_drive_root() -> None:
+    class TextFallbackModel:
+        async def stream_events(self, messages, tools=None) -> AsyncIterator[dict]:
+            yield {
+                "type": "content",
+                "text": "<function=engineering_repo_map><parameter=path>X:\\</parameter></function></tool_call>",
+            }
+
+    async def collect() -> list[dict]:
+        model = ToolCallCompatibilityModel(TextFallbackModel())
+        return [event async for event in model.stream_events(
+            [{"role": "user", "content": r"Please inspect X:\XV12 for errors."}],
+            tools=[{"function": {"name": "engineering_repo_map"}}],
+        )]
+
+    events = asyncio.run(collect())
+    calls = [event for event in events if event["type"] == "tool_call"]
+    assert len(calls) == 1
+    assert json.loads(calls[0]["arguments"])["path"] == r"X:\XV12"
+
+
+def test_explicit_windows_target_does_not_replace_more_specific_descendant_tool_path() -> None:
+    class NativeToolModel:
+        async def stream_events(self, messages, tools=None) -> AsyncIterator[dict]:
+            yield {
+                "type": "tool_call",
+                "id": "call-2",
+                "name": "files_local_read",
+                "arguments": json.dumps({"path": r"X:\XV12\app\assistant.py"}),
+            }
+
+    async def collect() -> list[dict]:
+        model = ToolCallCompatibilityModel(NativeToolModel())
+        return [event async for event in model.stream_events(
+            [{"role": "user", "content": r"Examine X:\XV12 as a senior engineer."}],
+            tools=[{"function": {"name": "files_local_read"}}],
+        )]
+
+    events = asyncio.run(collect())
+    assert json.loads(events[0]["arguments"])["path"] == r"X:\XV12\app\assistant.py"
