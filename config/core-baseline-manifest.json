@@ -49,13 +49,13 @@
   },
   "protected_core": {
     "files": {
-      "app/assistant.py": "84e46234fcfdda74014899a53acf3ec7550df6d8743fd436c0fa7b8546017d8d",
-      "app/model.py": "992e70dd85c28b8b60eb3c16e6c5a511bd1e639de740b199f44c82be65021e6d",
-      "app/context.py": "39d306ba12a292377ed7a3a23bc21529a7269cb296bddbf69c30097160299233",
+      "app/assistant.py": "8f05c11fc9eaf470db487adf5575d67c19eefdc3d27a74b7e7087e8d253369ac",
+      "app/model.py": "2dfb4c03ef2eb6df104e115d4060fc9e92f9809e68d94ed8b94903959634a732",
+      "app/context.py": "b228242d12f2e1a8450df54350ae1c840daa0927b96db5be44304adc6448b62d",
       "app/auth.py": "7fc43d5521ab1fdad0af08e6bbecc9d2c71cb7d892f297dd6721956dc57caa20",
-      "app/database.py": "0049b82b5cd39f63e51ee8eb68213e47e4a010010bc8c3df9109383c02357fc9"
+      "app/database.py": "bd65d61f4b41cbf070b01c1a88ce3aad5bae3b1184c7fdbdbd46e9c2cd5d4a9b"
     },
-    "main_stream_chat_sha256": "220da87b99f632503ab67ff057f70aff71c33febdfa21abcb10bcc67f5b2ded0",
+    "main_stream_chat_sha256": "5f845fbec2a4034ab787b26ba09066dfbce4100bb42d1a30afb0623eb274793c",
     "registry_interface_signatures": {
       "list_for": "(self, user: 'dict[str, Any]') -> 'list[dict[str, Any]]'",
       "model_tools": "(self, user: 'dict[str, Any]') -> 'list[dict[str, Any]]'",
@@ -80,9 +80,21 @@
           "99471ed"
         ],
         "reason": "Bounded five-second JWT leeway for Google iat clock skew without weakening signature/audience/issuer/expiry checks."
+      },
+      {
+        "files": [
+          "app/assistant.py",
+          "app/model.py",
+          "app/context.py",
+          "app/database.py"
+        ],
+        "commits": [
+          "407c43a"
+        ],
+        "reason": "E2E hardening: replaced the fixed four-round tool-call limit with independent bounded controls (model rounds/operations/wall-time/duplicate suppression) and a mandatory tools-disabled final synthesis (app/assistant.py); optional max_tokens passthrough for task-appropriate response budgets, backward-compatible via a signature probe (app/model.py); durable-evidence injection, per-conversation active project, and tool-schema-aware context budgeting (app/context.py); messages.status terminal-state vocabulary widened via a detected, idempotent table rebuild, plus active-subject evolution, per-conversation project binding, and durable evidence storage (app/database.py). stream_chat's protected contract changed only to read the new orchestrator terminal-state fields and persist them; its request/response shape and streaming behavior are unchanged."
       }
     ],
-    "hash_notes": "Protected core hashes are measured from the Windows operator working tree. Recently edited core files (app/assistant.py, app/auth.py) use CRLF on disk; unchanged core files remain LF and keep their original freeze hashes."
+    "hash_notes": "Protected core hashes are measured from the Windows operator working tree. Recently edited core files (app/assistant.py, app/auth.py, app/model.py, app/context.py, app/database.py) use CRLF on disk; unchanged core files remain LF and keep their original freeze hashes."
   },
   "versions": {
     "database_schema": 3,
