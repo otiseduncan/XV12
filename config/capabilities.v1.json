@@ -59,19 +59,19 @@
     },
     {
       "id": "files.local.write", "family": "files", "family_label": "Local Files", "family_description": "Bounded structured local filesystem access without shell execution.",
-      "description": "Create a new UTF-8 text file in the authenticated user's managed file root; never overwrites.",
+      "description": "Create a new UTF-8 text file in the authenticated user's writable Local Files workspace; for the Owner this is X:\\xoduz-sandbox. Never overwrites.",
       "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
-      "supported_scopes": ["write"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write"], "user": ["write"]},
-      "arguments_schema": {"type": "object", "required": ["path", "content"], "properties": {"path": {"type": "string"}, "content": {"type": "string", "maxLength": 524288}}, "additionalProperties": false},
-      "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "user-managed-local-files", "idempotency": "fail-if-exists"
+      "supported_scopes": ["write"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write"], "user": ["write"]}, "timeout_seconds": 10, "health": "available",
+      "arguments_schema": {"type": "object", "required": ["path", "content"], "properties": {"path": {"type": "string", "maxLength": 1000}, "content": {"type": "string", "maxLength": 524288}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "execution_environment": "user-managed-local-files", "idempotency": "fail-if-exists"
     },
     {
       "id": "files.local.modify", "family": "files", "family_label": "Local Files", "family_description": "Bounded structured local filesystem access without shell execution.",
-      "description": "Replace an existing authenticated-user managed text file only when its expected SHA256 matches.",
-      "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
-      "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]},
-      "arguments_schema": {"type": "object", "required": ["path", "content", "expected_sha256"], "properties": {"path": {"type": "string"}, "content": {"type": "string", "maxLength": 524288}, "expected_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, "additionalProperties": false},
-      "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "user-managed-local-files", "idempotency": "optimistic-sha256"
+      "description": "Modify or move/rename a Local Files file. For content replacement, provide path + content + expected_sha256; Owner content writes stay inside X:\\xoduz-sandbox. For a move/rename, provide path + destination (expected_sha256 optional): the authenticated Owner may move existing non-sensitive files between configured Local Files roots, including outside the sandbox; normal users remain inside their private managed root. Moves never overwrite an existing destination. Local Files exposes no delete operation.",
+      "version": "1.1.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
+      "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]}, "timeout_seconds": 10, "health": "available",
+      "arguments_schema": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "maxLength": 1000}, "content": {"type": "string", "maxLength": 524288}, "expected_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "destination": {"type": "string", "minLength": 1, "maxLength": 1000}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "execution_environment": "bounded-local-files", "idempotency": "optimistic-sha256-or-fail-if-destination-exists"
     },
     {
       "id": "files.local.batch_read", "family": "files", "family_label": "Local Files", "family_description": "Bounded structured local filesystem access without shell execution.",
@@ -164,14 +164,16 @@
     {
       "id": "calibration_iq.repair_orders.write", "family": "calibration_iq", "family_label": "Calibration IQ", "family_description": "Independent repair-order workflow service.",
       "description": "Apply a safe supported update_ro write through the Calibration IQ mutation API with version and idempotency proof.",
-      "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]}, "supported_scopes": ["write"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write"]},
-      "arguments_schema": {"type": "object", "required": ["repair_order_id", "operation", "arguments", "expected_version", "idempotency_key"], "properties": {"repair_order_id": {"type": "string"}, "operation": {"const": "update_ro"}, "arguments": {"type": "object"}, "expected_version": {"type": "integer", "minimum": 1}, "idempotency_key": {"type": "string", "minLength": 16}, "correlation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"}, "timeout_seconds": 30, "health": "dynamic", "execution_environment": "calibration-iq-authenticated-api", "idempotency": "required-upstream-key"
+      "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]}, "supported_scopes": ["write"], "operation_scope": "write", "classification": "write", "role_scope_ceiling": {"admin": ["write"]}, "timeout_seconds": 30, "health": "dynamic",
+      "arguments_schema": {"type": "object", "required": ["repair_order_id", "operation", "arguments", "expected_version", "idempotency_key"], "properties": {"repair_order_id": {"type": "string"}, "operation": {"const": "update_ro"}, "arguments": {"type": "object"}, "expected_version": {"type": "integer", "minimum": 1}, "idempotency_key": {"type": "string", "minLength": 16}, "correlation_id": {"type": "string"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "execution_environment": "calibration-iq-authenticated-api", "idempotency": "required-upstream-key"
     },
     {
       "id": "calibration_iq.repair_orders.modify", "family": "calibration_iq", "family_label": "Calibration IQ", "family_description": "Independent repair-order workflow service.",
       "description": "Modify an existing supported repair-order field, status, blocker, or requirement with verified exactly-once receipt.",
-      "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]}, "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"]},
-      "arguments_schema": {"type": "object", "required": ["repair_order_id", "operation", "arguments", "expected_version", "idempotency_key"], "properties": {"repair_order_id": {"type": "string"}, "operation": {"type": "string", "enum": ["change_status", "update_ro", "update_blocker", "update_requirement"]}, "arguments": {"type": "object"}, "expected_version": {"type": "integer", "minimum": 1}, "idempotency_key": {"type": "string", "minLength": 16}, "correlation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"}, "timeout_seconds": 30, "health": "dynamic", "execution_environment": "calibration-iq-authenticated-api", "idempotency": "required-upstream-key"
+      "version": "1.0.0", "risk_tier": 2, "authorization": {"roles": ["admin"]}, "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"]}, "timeout_seconds": 30, "health": "dynamic",
+      "arguments_schema": {"type": "object", "required": ["repair_order_id", "operation", "arguments", "expected_version", "idempotency_key"], "properties": {"repair_order_id": {"type": "string"}, "operation": {"type": "string", "enum": ["change_status", "update_ro", "update_blocker", "update_requirement"]}, "arguments": {"type": "object"}, "expected_version": {"type": "integer", "minimum": 1}, "idempotency_key": {"type": "string", "minLength": 16}, "correlation_id": {"type": "string"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "execution_environment": "calibration-iq-authenticated-api", "idempotency": "required-upstream-key"
     },
     {
       "id": "project.list", "family": "projects",
@@ -301,8 +303,8 @@
     {
       "id": "builder.sandbox.exec", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
       "description": "Run a bounded argv command in the isolated Docker Builder sandbox for dependency installs, builds, migrations, or tests. Host shell access is never provided.", "version": "1.0.0", "risk_tier": 1, "model_exposed": false, "authorization": {"roles": ["admin", "user"]},
-      "arguments_schema": {"type": "object", "required": ["workspace_id", "argv"], "properties": {"workspace_id": {"type": "string"}, "argv": {"type": "array"}, "network": {"type": "boolean"}, "secret_refs": {"type": "array"}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 900}, "report_type": {"type": "string", "enum": ["build_report", "test_report"]}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
-      "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 920, "health": "dynamic", "execution_environment": "docker-builder-sandbox", "idempotency": "command-dependent"
+      "arguments_schema": {"type": "object", "required": ["workspace_id", "argv"], "properties": {"workspace_id": {"type": "string"}, "argv": {"type": "array"}, "network": {"type": "boolean"}, "secret_refs": {"type": "array"}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 900}, "report_type": {"type": "string", "enum": ["build_report", "test_report"]}, "conversation_id": {"type": "string"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 920, "health": "dynamic", "execution_environment": "docker-builder-sandbox", "idempotency": "command-dependent"
     },
     {
       "id": "builder.preview.start", "family": "builder", "family_label": "Application Builder", "family_description": "Managed application workspaces, isolated execution, previews, and downloads.",
@@ -397,19 +399,22 @@
     {
       "id": "media.image.generate", "family": "media", "family_label": "Media Creation", "family_description": "Provider-neutral image and video creation with durable chat artifacts.",
       "description": "Generate an actual prompt-driven image. Auto selection uses ComfyUI for ordinary realistic scenes and the local design provider only for explicit logo, icon, poster, vector, diagram, or similar design requests. Never silently downgrade an unavailable realistic request to a poster.", "version": "1.1.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
-      "arguments_schema": {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}, "provider": {"type": "string", "enum": ["auto", "comfyui", "design"]}, "title": {"type": "string"}, "width": {"type": "integer", "minimum": 256, "maximum": 2048}, "height": {"type": "integer", "minimum": 256, "maximum": 2048}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "arguments_schema": {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}, "provider": {"type": "string", "enum": ["auto", "comfyui", "design"]}, "title": {"type": "string"}, "width": {"type": "integer", "minimum": 256, "maximum": 2048}, "height": {"type": "integer", "minimum": 256, "maximum": 2048}, "conversation_id": {"type": "string"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"},
       "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 360, "health": "dynamic", "execution_environment": "provider-neutral-media", "idempotency": "creates-artifact"
     },
     {
       "id": "media.image.edit", "family": "media", "family_label": "Media Creation", "family_description": "Provider-neutral image and video creation with durable chat artifacts.",
       "description": "Create a new edited image from an owned source artifact while preserving parent linkage and the original. ComfyUI image-to-image is not configured; ComfyUI sources fail truthfully unless the caller explicitly requests the design composition provider.", "version": "1.1.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
-      "arguments_schema": {"type": "object", "required": ["source_artifact_id", "prompt"], "properties": {"source_artifact_id": {"type": "string"}, "prompt": {"type": "string"}, "provider": {"type": "string", "enum": ["auto", "comfyui", "design"]}, "title": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "arguments_schema": {"type": "object", "required": ["source_artifact_id", "prompt"], "properties": {"source_artifact_id": {"type": "string"}, "prompt": {"type": "string"}, "provider": {"type": "string", "enum": ["auto", "comfyui", "design"]}, "title": {"type": "string"}, "conversation_id": {"type": "string"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"},
       "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]}, "timeout_seconds": 30, "health": "available", "execution_environment": "provider-neutral-media", "idempotency": "creates-derived-artifact"
     },
     {
       "id": "media.video.generate", "family": "media", "family_label": "Media Creation", "family_description": "Provider-neutral image and video creation with durable chat artifacts.",
       "description": "Start a durable background job that creates a playable video from an owned source image artifact.", "version": "1.0.0", "risk_tier": 1, "authorization": {"roles": ["admin", "user"]},
-      "arguments_schema": {"type": "object", "required": ["source_artifact_id", "prompt"], "properties": {"source_artifact_id": {"type": "string"}, "prompt": {"type": "string"}, "title": {"type": "string"}, "duration_seconds": {"type": "integer", "minimum": 1, "maximum": 30}, "conversation_id": {"type": "string"}}, "additionalProperties": false}, "result_schema": {"type": "object"},
+      "arguments_schema": {"type": "object", "required": ["source_artifact_id", "prompt"], "properties": {"source_artifact_id": {"type": "string"}, "prompt": {"type": "string"}, "title": {"type": "string"}, "duration_seconds": {"type": "integer", "minimum": 1, "maximum": 30}, "conversation_id": {"type": "string"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"},
       "supported_scopes": ["execute"], "operation_scope": "execute", "classification": "execute", "role_scope_ceiling": {"admin": ["execute"], "user": ["execute"]}, "timeout_seconds": 15, "health": "dynamic", "execution_environment": "provider-neutral-media-job", "idempotency": "creates-job"
     },
     {

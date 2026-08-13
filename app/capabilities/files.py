@@ -26,15 +26,14 @@ BATCH_READ_FILE_CHAR_LIMIT = 6000
 BATCH_READ_TOTAL_CHAR_LIMIT = 24_000
 
 # XODUZ's owner-authorized local workspace. This is intentionally outside the XV12 source
-# repository: normal conversational file writes for the authenticated Owner belong here,
-# while repository mutation continues to require the dedicated engineering/Builder boundary.
+# repository: normal conversational file writes for the authenticated Owner belong here.
 # The environment override exists for recovery/testing without changing the architectural
 # default expected on the operator machine.
 DEFAULT_XODUZ_SANDBOX_PATH = Path(os.getenv("XV12_XODUZ_SANDBOX_PATH", r"X:\xoduz-sandbox"))
 
 
 class SensitivePathError(PermissionError):
-    """Raised when a capability-surface read targets a secret or credential path."""
+    """Raised when a capability-surface read/move targets a secret or credential path."""
 
 
 def is_sensitive_path(path: Path) -> bool:
@@ -47,7 +46,7 @@ def is_sensitive_path(path: Path) -> bool:
 def guard_sensitive_path(path: Path) -> None:
     if is_sensitive_path(path):
         raise SensitivePathError(
-            "This path matches the protected secret/credential policy and cannot be read through file capabilities."
+            "This path matches the protected secret/credential policy and cannot be accessed through file capabilities."
         )
 
 
@@ -76,21 +75,22 @@ def read_text_range(path: Path, start_line: int, end_line: int) -> dict[str, Any
 
 
 class LocalFilesCapability:
-    """Structured filesystem access with bounded roots and managed-only mutations.
+    """Structured local filesystem access with explicit read/write/move boundaries.
 
-    Read authorization is enforced deterministically per authenticated user:
-    - admin retains the explicitly configured repository-wide inspection roots and XODUZ's
-      owner-authorized local sandbox;
+    Read authorization is deterministic per authenticated user:
+    - admin retains the explicitly configured local inspection roots and XODUZ's sandbox;
     - normal users may read only their own managed files and their own attachments.
 
-    Mutation authorization is intentionally narrower than admin read authorization:
-    - the authenticated Owner's relative/absolute Local Files writes resolve only inside
+    Content writes are narrower:
+    - the authenticated Owner's create/replace operations resolve only inside
       ``X:\\xoduz-sandbox`` (or the explicit XV12_XODUZ_SANDBOX_PATH override);
     - normal-user writes remain isolated under their per-user managed root.
 
-    This means X can create and modify local working files without gaining generic write
-    authority over ``X:\\XV12`` or the rest of the host filesystem. Secret/credential paths
-    remain denied for every role at this capability surface.
+    Move/rename is a distinct Local Files authority. The authenticated Owner may move an
+    existing non-sensitive file anywhere between configured Local Files roots (including
+    outside the sandbox), while normal users may move only inside their private managed root.
+    Moves never overwrite an existing destination. Local Files intentionally exposes no
+    delete operation.
     """
 
     def __init__(
@@ -144,6 +144,11 @@ class LocalFilesCapability:
             roots.append(self.attachments_root / str(user.get("id") or ""))
         return [root.resolve() for root in roots]
 
+    def _authorized_move_roots(self, user: dict[str, Any]) -> list[Path]:
+        if self._is_authenticated_owner(user):
+            return [*self.read_roots, self.admin_sandbox_root]
+        return [self._mutation_root(user)]
+
     def _read_path(self, raw: str, user: dict[str, Any]) -> Path:
         path = Path(raw).resolve()
         if not self._within(path, self._authorized_read_roots(user)):
@@ -159,6 +164,18 @@ class LocalFilesCapability:
             if self._is_authenticated_owner(user):
                 raise ValueError("Writes are restricted to XODUZ's local sandbox.")
             raise ValueError("Writes are restricted to the authenticated user's managed root.")
+        guard_sensitive_path(path)
+        return path
+
+    def _move_path(self, raw: str, user: dict[str, Any]) -> Path:
+        if not str(raw or "").strip():
+            raise ValueError("Move source and destination paths must be non-empty.")
+        path = Path(raw).resolve()
+        if not self._within(path, self._authorized_move_roots(user)):
+            if self._is_authenticated_owner(user):
+                raise ValueError("Moves are restricted to configured Local Files roots.")
+            raise ValueError("Moves are restricted to the authenticated user's managed root.")
+        guard_sensitive_path(path)
         return path
 
     @staticmethod
@@ -265,11 +282,54 @@ class LocalFilesCapability:
         }
 
     def modify(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        destination_raw = str(arguments.get("destination") or "").strip()
+        has_content = "content" in arguments
+        if destination_raw:
+            if has_content:
+                raise ValueError("Move/rename requests cannot also replace file content.")
+            source = self._move_path(str(arguments.get("path") or ""), user)
+            destination = self._move_path(destination_raw, user)
+            if not source.is_file():
+                return {"status": "no_result", "path": str(source)}
+            if source == destination:
+                raise ValueError("Move destination must differ from the source path.")
+            if destination.exists():
+                raise ValueError("Move destination already exists; Local Files never overwrites during a move.")
+            expected = str(arguments.get("expected_sha256") or "").strip()
+            before = self._metadata(source)
+            if expected and before["sha256"] != expected:
+                raise ValueError("File changed before move; expected SHA256 does not match.")
+
+            mutation_root = self._mutation_root(user)
+            if not destination.parent.exists():
+                if destination.is_relative_to(mutation_root):
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                else:
+                    raise ValueError("Destination directory must already exist for moves outside the writable workspace.")
+            if not destination.parent.is_dir():
+                raise ValueError("Move destination parent is not a directory.")
+
+            source.rename(destination)
+            after = self._metadata(destination)
+            return {
+                "status": "success", "operation": "move",
+                "message": f"Moved {source.name} to {destination}.",
+                "receipt": {
+                    "from": str(source), "to": str(destination), "sha256": after["sha256"],
+                    "bytes": after["bytes"], "user_id": user["id"], "overwrote": False,
+                },
+                "artifacts": self._artifact(destination, user),
+            }
+
+        if not has_content:
+            raise ValueError("Modify requires content, or destination for a move/rename operation.")
+        expected = str(arguments.get("expected_sha256") or "").strip()
+        if not expected:
+            raise ValueError("Content replacement requires expected_sha256.")
         path = self._managed_path(str(arguments.get("path") or ""), user)
         if not path.is_file():
             return {"status": "no_result", "path": str(path)}
         before = self._metadata(path)
-        expected = str(arguments.get("expected_sha256") or "")
         if before["sha256"] != expected:
             raise ValueError("File changed before modification; expected SHA256 does not match.")
         path.write_text(str(arguments.get("content") or ""), encoding="utf-8", newline="\n")

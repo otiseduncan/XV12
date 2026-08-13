@@ -38,6 +38,7 @@ jobs:
           tests/test_model_compat.py
           tests/test_auth_session.py
           tests/test_capability_extensions.py
+          tests/test_files_move.py
           tests/test_builder_execution_session.py
           tests/test_builder_active_job_dedupe.py
           tests/test_builder_artifact_handoff.py
