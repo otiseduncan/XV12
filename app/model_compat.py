@@ -5,6 +5,7 @@ import json
 import re
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import PureWindowsPath
 from typing import Any
 
 
@@ -18,6 +19,15 @@ PARAMETER_BLOCK = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 TEXT_TOOL_PREFIX_WINDOW = 256
+WINDOWS_PATH = re.compile(r"\b[A-Za-z]:[\\/][^\s\"']*", re.IGNORECASE)
+ROOT_TARGET_TOOLS = {
+    "engineering_repo_map",
+    "engineering_code_search",
+    "engineering_git_status",
+    "engineering_git_diff",
+    "engineering_tests_inspect",
+    "files_local_read",
+}
 
 
 def _accepts_max_tokens(model: Any) -> bool:
@@ -25,6 +35,66 @@ def _accepts_max_tokens(model: Any) -> bool:
         return "max_tokens" in inspect.signature(model.stream_events).parameters
     except (TypeError, ValueError):
         return False
+
+
+def _explicit_windows_path(message: str) -> str | None:
+    """Return the first explicit Windows filesystem target exactly as the user supplied it.
+
+    This is intentionally syntax-only; authorization still belongs to the capability itself.
+    The compatibility layer uses the value only to stop a model/tool-call serialization error
+    from broadening ``X:\\XV12`` into ``X:\\`` before the capability sees it.
+    """
+    match = WINDOWS_PATH.search(message or "")
+    if not match:
+        return None
+    target = match.group(0).rstrip(".,;:)]}")
+    return target or None
+
+
+def _is_broader_windows_path(candidate: str, target: str) -> bool:
+    """True when candidate is a strict Windows-path ancestor of target on the same drive."""
+    try:
+        candidate_path = PureWindowsPath(candidate)
+        target_path = PureWindowsPath(target)
+    except (TypeError, ValueError):
+        return False
+    if candidate_path.drive.casefold() != target_path.drive.casefold():
+        return False
+    candidate_parts = tuple(part.casefold() for part in candidate_path.parts)
+    target_parts = tuple(part.casefold() for part in target_path.parts)
+    return len(candidate_parts) < len(target_parts) and target_parts[: len(candidate_parts)] == candidate_parts
+
+
+def preserve_explicit_path_target(event: dict[str, Any], user_message: str) -> dict[str, Any]:
+    """Prevent root-scoped file/engineering calls from silently broadening a user path.
+
+    Qwen may occasionally emit ``X:\\`` even when the user supplied ``X:\\XV12``. The broad
+    drive root is correctly rejected by RepoInspectionService, but the rejection is misleading
+    because the user never requested the drive root. When a root-level inspection call omits
+    its path or supplies a strict ancestor of the explicit target, pin it back to the exact
+    user target. More-specific descendant paths are preserved unchanged for follow-up reads.
+
+    This does not grant access: the downstream capability still performs its normal root and
+    sensitive-path authorization.
+    """
+    if event.get("type") != "tool_call" or str(event.get("name") or "") not in ROOT_TARGET_TOOLS:
+        return event
+    target = _explicit_windows_path(user_message)
+    if not target:
+        return event
+    raw_arguments = event.get("arguments")
+    try:
+        arguments = raw_arguments if isinstance(raw_arguments, dict) else json.loads(str(raw_arguments or "{}"))
+    except json.JSONDecodeError:
+        return event
+    if not isinstance(arguments, dict):
+        return event
+    current = str(arguments.get("path") or "").strip()
+    if current and not _is_broader_windows_path(current, target):
+        return event
+    repaired = dict(arguments)
+    repaired["path"] = target
+    return {**event, "arguments": json.dumps(repaired, ensure_ascii=False)}
 
 
 def artifact_followup_arguments(message: str, allowed_names: set[str]) -> dict[str, Any] | None:
@@ -129,6 +199,7 @@ class ToolCallCompatibilityModel:
         async for event in inner:
             if event.get("type") != "content" or not allowed_names:
                 if event.get("type") == "tool_call":
+                    event = preserve_explicit_path_target(event, last_user_message)
                     emitted_tool_call = True
                 if pending and not capturing and required_artifact_arguments is None:
                     yield {"type": "content", "text": pending}
@@ -155,7 +226,7 @@ class ToolCallCompatibilityModel:
             if calls:
                 for call in calls:
                     emitted_tool_call = True
-                    yield call
+                    yield preserve_explicit_path_target(call, last_user_message)
             else:
                 yield {"type": "content", "text": "I couldn't complete that capability call safely."}
         elif pending and required_artifact_arguments is None:
