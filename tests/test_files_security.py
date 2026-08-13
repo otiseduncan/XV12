@@ -16,6 +16,7 @@ def make_capability(tmp_path: Path) -> LocalFilesCapability:
         read_roots=[tmp_path],
         managed_root=tmp_path / "managed",
         attachments_root=tmp_path / "attachments",
+        admin_sandbox_root=tmp_path / "xoduz-sandbox",
     )
 
 
@@ -74,6 +75,56 @@ def test_normal_user_can_read_their_own_attachment_area(tmp_path):
     result = capability.read({"path": str(target)}, user)
     assert result["status"] == "success"
     assert result["content"] == "attachment content"
+
+
+def test_authenticated_owner_relative_writes_use_xoduz_sandbox(tmp_path):
+    capability = make_capability(tmp_path)
+    owner = {"id": "owner-id", "role": "admin", "google_sub": "owner-google-sub"}
+
+    written = capability.write({"path": "reports/audit.txt", "content": "sandbox proof"}, owner)
+    target = Path(written["receipt"]["path"])
+
+    assert written["status"] == "success"
+    assert written["workspace"] == "xoduz-sandbox"
+    assert Path(written["workspace_root"]) == capability.admin_sandbox_root
+    assert target == capability.admin_sandbox_root / "reports" / "audit.txt"
+    assert target.read_text(encoding="utf-8") == "sandbox proof"
+    assert not (capability.managed_root / owner["id"] / "reports" / "audit.txt").exists()
+
+    read_back = capability.read({"path": str(target)}, owner)
+    assert read_back["status"] == "success"
+    assert read_back["content"] == "sandbox proof"
+
+
+def test_authenticated_owner_can_use_absolute_path_only_inside_xoduz_sandbox(tmp_path):
+    capability = make_capability(tmp_path)
+    owner = {"id": "owner-id", "role": "admin", "google_sub": "owner-google-sub"}
+    inside = capability.admin_sandbox_root / "absolute.txt"
+    outside = tmp_path / "outside-owner-write.txt"
+
+    written = capability.write({"path": str(inside), "content": "inside"}, owner)
+    assert Path(written["receipt"]["path"]) == inside
+
+    with pytest.raises(ValueError, match="XODUZ's local sandbox"):
+        capability.write({"path": str(outside), "content": "outside"}, owner)
+    assert not outside.exists()
+
+
+def test_authenticated_owner_modify_stays_inside_xoduz_sandbox(tmp_path):
+    capability = make_capability(tmp_path)
+    owner = {"id": "owner-id", "role": "admin", "google_sub": "owner-google-sub"}
+    written = capability.write({"path": "notes.txt", "content": "v1"}, owner)
+
+    modified = capability.modify({
+        "path": written["receipt"]["path"],
+        "content": "v2",
+        "expected_sha256": written["receipt"]["sha256"],
+    }, owner)
+
+    assert modified["status"] == "success"
+    assert modified["workspace"] == "xoduz-sandbox"
+    assert Path(modified["receipt"]["path"]).is_relative_to(capability.admin_sandbox_root)
+    assert Path(modified["receipt"]["path"]).read_text(encoding="utf-8") == "v2"
 
 
 @pytest.mark.parametrize("filename", [".env", ".env.local", ".env.security-fixture", "synthetic-secret.txt", "id_rsa", "credentials.json"])

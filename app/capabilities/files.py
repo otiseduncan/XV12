@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,13 @@ RANGED_READ_MAX_LINES = 400
 BATCH_READ_MAX_FILES = 8
 BATCH_READ_FILE_CHAR_LIMIT = 6000
 BATCH_READ_TOTAL_CHAR_LIMIT = 24_000
+
+# XODUZ's owner-authorized local workspace. This is intentionally outside the XV12 source
+# repository: normal conversational file writes for the authenticated Owner belong here,
+# while repository mutation continues to require the dedicated engineering/Builder boundary.
+# The environment override exists for recovery/testing without changing the architectural
+# default expected on the operator machine.
+DEFAULT_XODUZ_SANDBOX_PATH = Path(os.getenv("XV12_XODUZ_SANDBOX_PATH", r"X:\xoduz-sandbox"))
 
 
 class SensitivePathError(PermissionError):
@@ -71,9 +79,18 @@ class LocalFilesCapability:
     """Structured filesystem access with bounded roots and managed-only mutations.
 
     Read authorization is enforced deterministically per authenticated user:
-    - admin retains the explicitly configured repository-wide inspection roots;
+    - admin retains the explicitly configured repository-wide inspection roots and XODUZ's
+      owner-authorized local sandbox;
     - normal users may read only their own managed files and their own attachments.
-    Secret/credential paths are denied for every role at this capability surface.
+
+    Mutation authorization is intentionally narrower than admin read authorization:
+    - the authenticated Owner's relative/absolute Local Files writes resolve only inside
+      ``X:\\xoduz-sandbox`` (or the explicit XV12_XODUZ_SANDBOX_PATH override);
+    - normal-user writes remain isolated under their per-user managed root.
+
+    This means X can create and modify local working files without gaining generic write
+    authority over ``X:\\XV12`` or the rest of the host filesystem. Secret/credential paths
+    remain denied for every role at this capability surface.
     """
 
     def __init__(
@@ -82,20 +99,46 @@ class LocalFilesCapability:
         managed_root: Path,
         artifacts: Any | None = None,
         attachments_root: Path | None = None,
+        admin_sandbox_root: Path | None = None,
     ) -> None:
         self.read_roots = [path.resolve() for path in read_roots]
         self.managed_root = managed_root.resolve()
         self.artifacts = artifacts
         self.attachments_root = attachments_root.resolve() if attachments_root else None
+        self.admin_sandbox_root = (admin_sandbox_root or DEFAULT_XODUZ_SANDBOX_PATH).resolve()
         self.managed_root.mkdir(parents=True, exist_ok=True)
+
+        # Sandbox files use the existing user-scoped Artifact Store so they can still be
+        # displayed/downloaded in chat. Adding this one explicit root does not make arbitrary
+        # host paths artifact-eligible, and ArtifactStore ownership/authorization still applies.
+        if self.artifacts is not None and hasattr(self.artifacts, "allowed_roots"):
+            roots = self.artifacts.allowed_roots
+            if self.admin_sandbox_root not in roots:
+                roots.append(self.admin_sandbox_root)
 
     @staticmethod
     def _within(path: Path, roots: list[Path]) -> bool:
         return any(path == root or path.is_relative_to(root) for root in roots)
 
+    @staticmethod
+    def _is_authenticated_owner(user: dict[str, Any]) -> bool:
+        # Real application identities always carry google_sub. Keeping this distinction lets
+        # isolated unit fixtures that use a bare {role: admin} remain hermetic while the
+        # actual authenticated Owner receives the permanent XODUZ sandbox contract.
+        return user.get("role") == "admin" and bool(user.get("google_sub"))
+
+    def _mutation_root(self, user: dict[str, Any]) -> Path:
+        if self._is_authenticated_owner(user):
+            root = self.admin_sandbox_root
+        else:
+            root = self.managed_root / str(user.get("id") or "")
+        root = root.resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
     def _authorized_read_roots(self, user: dict[str, Any]) -> list[Path]:
         if user.get("role") == "admin":
-            return self.read_roots
+            return [*self.read_roots, self.admin_sandbox_root]
         roots = [self.managed_root / str(user.get("id") or "")]
         if self.attachments_root:
             roots.append(self.attachments_root / str(user.get("id") or ""))
@@ -109,11 +152,12 @@ class LocalFilesCapability:
         return path
 
     def _managed_path(self, raw: str, user: dict[str, Any]) -> Path:
-        user_root = (self.managed_root / user["id"]).resolve()
-        user_root.mkdir(parents=True, exist_ok=True)
+        mutation_root = self._mutation_root(user)
         candidate = Path(raw)
-        path = (user_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
-        if path == user_root or not path.is_relative_to(user_root):
+        path = (mutation_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+        if path == mutation_root or not path.is_relative_to(mutation_root):
+            if self._is_authenticated_owner(user):
+                raise ValueError("Writes are restricted to XODUZ's local sandbox.")
             raise ValueError("Writes are restricted to the authenticated user's managed root.")
         return path
 
@@ -211,7 +255,14 @@ class LocalFilesCapability:
         content = str(arguments.get("content") or "")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8", newline="\n")
-        return {"status": "success", "operation": "write", "receipt": {**self._metadata(path), "user_id": user["id"]}, "artifacts": self._artifact(path, user, content)}
+        workspace = "xoduz-sandbox" if self._is_authenticated_owner(user) else "user-managed"
+        return {
+            "status": "success", "operation": "write",
+            "message": f"Created {path.name} in {workspace}.",
+            "workspace": workspace, "workspace_root": str(self._mutation_root(user)),
+            "receipt": {**self._metadata(path), "user_id": user["id"]},
+            "artifacts": self._artifact(path, user, content),
+        }
 
     def modify(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         path = self._managed_path(str(arguments.get("path") or ""), user)
@@ -223,4 +274,11 @@ class LocalFilesCapability:
             raise ValueError("File changed before modification; expected SHA256 does not match.")
         path.write_text(str(arguments.get("content") or ""), encoding="utf-8", newline="\n")
         content = str(arguments.get("content") or "")
-        return {"status": "success", "operation": "modify", "receipt": {"before_sha256": before["sha256"], **self._metadata(path), "user_id": user["id"]}, "artifacts": self._artifact(path, user, content)}
+        workspace = "xoduz-sandbox" if self._is_authenticated_owner(user) else "user-managed"
+        return {
+            "status": "success", "operation": "modify",
+            "message": f"Updated {path.name} in {workspace}.",
+            "workspace": workspace, "workspace_root": str(self._mutation_root(user)),
+            "receipt": {"before_sha256": before["sha256"], **self._metadata(path), "user_id": user["id"]},
+            "artifacts": self._artifact(path, user, content),
+        }
