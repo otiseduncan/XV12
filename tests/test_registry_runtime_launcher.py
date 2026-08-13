@@ -14,7 +14,7 @@ from .conftest import login
 def test_registry_is_versioned_and_gateway_executes_registered_tier_zero(client):
     login(client, "admin")
     listing = client.get("/api/capabilities").json()
-    assert listing["registry_version"] == "4.2.0"
+    assert listing["registry_version"] == "4.3.0"
     ids = {item["id"] for item in listing["capabilities"]}
     assert {"system.health.read", "web.current.search", "adas.coverage.read", "project.list", "settings.voice.read", "settings.voice.update"} <= ids
     assert "service.calibration_iq.start" in ids
@@ -23,6 +23,17 @@ def test_registry_is_versioned_and_gateway_executes_registered_tier_zero(client)
     result = client.post("/api/capabilities/system.health.read", json={"arguments": {}})
     assert result.status_code == 200
     assert result.json()["authorization"]["allowed"] is True
+
+
+@pytest.mark.registry_gateway
+def test_runtime_json_current_registry_version_matches_live_registry():
+    """runtime.json's versions.capability_registry is current-state metadata, not read by
+    any application code -- it must be kept synchronized by hand or by this regression, not
+    left to drift. Historical frozen baseline manifests are a separate, immutable concept
+    and are intentionally not touched here."""
+    runtime = json.loads((ROOT / "config" / "runtime.json").read_text(encoding="utf-8"))
+    registry = json.loads((ROOT / "config" / "capabilities.v1.json").read_text(encoding="utf-8"))
+    assert runtime["versions"]["capability_registry"] == registry["registry_version"]
 
 
 @pytest.mark.authorization
@@ -42,6 +53,16 @@ def test_health_verifies_expected_model_alias_context_and_owned_paths(client):
     assert health["model"]["context_tokens"] == 32768
     assert health["model"]["executable_owned"] is True
     assert health["model"]["model_owned"] is True
+
+
+@pytest.mark.model_runtime
+def test_health_database_schema_reflects_the_actual_migrated_value(client, app):
+    """The health contract's database.schema must read the real app_meta.schema_version
+    rather than a hardcoded literal that silently drifts every time a migration bumps it."""
+    login(client)
+    health = client.get("/api/health").json()
+    assert health["database"]["schema"] == app.state.store.schema_version()
+    assert health["database"]["schema"] != "unknown"
 
 
 @pytest.mark.launcher

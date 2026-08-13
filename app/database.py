@@ -91,7 +91,7 @@ class UserScopedStore:
                     conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
                     role TEXT NOT NULL CHECK(role IN ('user','assistant')),
                     content TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('complete','interrupted','failed')),
+                    status TEXT NOT NULL CHECK(status IN ('complete','partial_success','budget_exhausted','interrupted','failed','cancelled')),
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
@@ -149,6 +149,18 @@ class UserScopedStore:
                     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                     activated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS conversation_active_projects (
+                    conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    activated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS conversation_evidence (
+                    conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    evidence_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS voice_settings (
                     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                     voice_name TEXT NOT NULL DEFAULT 'Google US English',
@@ -165,10 +177,47 @@ class UserScopedStore:
             message_columns = {row["name"] for row in db.execute("PRAGMA table_info(messages)")}
             if "metadata_json" not in message_columns:
                 db.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'")
+            self._migrate_message_terminal_states(db)
             db.execute(
-                "INSERT INTO app_meta(key,value) VALUES('schema_version','3') ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+                "INSERT INTO app_meta(key,value) VALUES('schema_version','4') ON CONFLICT(key) DO UPDATE SET value=excluded.value"
             )
         self._ensure_owner_record()
+
+    @staticmethod
+    def _migrate_message_terminal_states(db: sqlite3.Connection) -> None:
+        """Widen messages.status's CHECK constraint to the full terminal-state vocabulary.
+        SQLite cannot ALTER a CHECK constraint in place, so this rebuilds the table only when
+        the live constraint is still the narrow ('complete','interrupted','failed') set --
+        detected from the stored CREATE TABLE text itself, not merely a schema-version number,
+        so it is safe to run unconditionally on every startup."""
+        row = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'").fetchone()
+        existing_sql = str(row["sql"] or "") if row else ""
+        if "budget_exhausted" in existing_sql:
+            return
+        db.executescript(
+            """
+            ALTER TABLE messages RENAME TO messages_pre_terminal_states;
+            CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+                content TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('complete','partial_success','budget_exhausted','interrupted','failed','cancelled')),
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO messages(id,user_id,conversation_id,role,content,status,metadata_json,created_at)
+                SELECT id,user_id,conversation_id,role,content,status,metadata_json,created_at FROM messages_pre_terminal_states;
+            DROP TABLE messages_pre_terminal_states;
+            CREATE INDEX IF NOT EXISTS messages_user_conversation ON messages(user_id, conversation_id, created_at);
+            """
+        )
+
+    def schema_version(self) -> str:
+        with self.connect() as db:
+            row = db.execute("SELECT value FROM app_meta WHERE key='schema_version'").fetchone()
+            return str(row["value"]) if row else "unknown"
 
     def _ensure_owner_record(self) -> None:
         now = utcnow()
@@ -401,13 +450,31 @@ class UserScopedStore:
             row = db.execute("SELECT subject_json FROM active_subjects WHERE conversation_id=? AND user_id=?", (conversation_id, user_id)).fetchone()
             return json.loads(row["subject_json"]) if row else {}
 
-    def ensure_active_subject(self, user_id: str, conversation_id: str, first_user_text: str) -> dict[str, Any]:
+    def ensure_active_subject(self, user_id: str, conversation_id: str, latest_user_text: str) -> dict[str, Any]:
+        """Update the active-subject state with the latest substantial user message. The
+        subject evolves every turn -- an abrupt switch, an explicit correction, or returning
+        to an earlier topic all just become the new current topic -- instead of freezing to
+        the conversation's first message forever. A short rolling history of prior topics is
+        kept so the model can recognize a return to something discussed earlier; this is
+        deliberately plain state tracking, not an intent classifier."""
         current = self.get_active_subject(user_id, conversation_id)
-        if current or len(first_user_text.strip()) < 8:
+        text = latest_user_text.strip()
+        if len(text) < 8:
             return current
-        subject = {"topic": first_user_text.strip()[:180]}
+        topic = text[:180]
+        if current.get("topic") == topic:
+            return current
+        history = [item for item in (current.get("recent_topics") or []) if item != topic]
+        if current.get("topic") and current["topic"] != topic:
+            history = [current["topic"], *[item for item in history if item != current["topic"]]]
+        subject = {"topic": topic, "recent_topics": history[:3]}
         with self.connect() as db:
-            db.execute("INSERT OR IGNORE INTO active_subjects(conversation_id,user_id,subject_json,updated_at) VALUES(?,?,?,?)", (conversation_id, user_id, json.dumps(subject), utcnow()))
+            db.execute(
+                """INSERT INTO active_subjects(conversation_id,user_id,subject_json,updated_at) VALUES(?,?,?,?)
+                   ON CONFLICT(conversation_id) DO UPDATE SET subject_json=excluded.subject_json,updated_at=excluded.updated_at
+                   WHERE user_id=excluded.user_id""",
+                (conversation_id, user_id, json.dumps(subject), utcnow()),
+            )
         return subject
 
     def add_attachment(self, user_id: str, conversation_id: str | None, original_name: str, storage_path: str, content_type: str, size_bytes: int) -> dict[str, Any]:
@@ -467,6 +534,43 @@ class UserScopedStore:
             ).fetchone()
             return dict(row) if row else None
 
+    def activate_project_for_conversation(self, user_id: str, conversation_id: str, project_id: str) -> dict[str, Any] | None:
+        """Bind a project to one specific conversation without disturbing the user's global
+        last-selected project (the standalone Projects UI and its header chip keep working
+        unchanged). This is what in-chat project activation should use: two open
+        conversations for the same user can carry different active projects, preventing the
+        cross-conversation project-context bleed the global-only table allowed."""
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM projects WHERE id=? AND user_id=? AND status='active'", (project_id, user_id)).fetchone()
+            if not row:
+                return None
+            db.execute(
+                """INSERT INTO conversation_active_projects(conversation_id,user_id,project_id,activated_at) VALUES(?,?,?,?)
+                   ON CONFLICT(conversation_id) DO UPDATE SET project_id=excluded.project_id,activated_at=excluded.activated_at
+                   WHERE user_id=excluded.user_id""",
+                (conversation_id, user_id, project_id, utcnow()),
+            )
+            return {**dict(row), "is_active": True}
+
+    def deactivate_project_for_conversation(self, user_id: str, conversation_id: str) -> bool:
+        with self.connect() as db:
+            return db.execute(
+                "DELETE FROM conversation_active_projects WHERE conversation_id=? AND user_id=?", (conversation_id, user_id)
+            ).rowcount > 0
+
+    def active_project_for_conversation(self, user_id: str, conversation_id: str) -> dict[str, Any] | None:
+        """The project bound to this specific conversation if one was explicitly activated in
+        it; otherwise the user's global last-selected project (unchanged legacy behavior)."""
+        with self.connect() as db:
+            row = db.execute(
+                """SELECT p.* FROM conversation_active_projects c JOIN projects p ON p.id=c.project_id
+                   WHERE c.conversation_id=? AND c.user_id=? AND p.user_id=? AND p.status='active'""",
+                (conversation_id, user_id, user_id),
+            ).fetchone()
+            if row:
+                return dict(row)
+        return self.active_project(user_id)
+
     def attach_to_conversation(self, user_id: str, conversation_id: str, attachment_ids: list[str]) -> list[dict[str, Any]]:
         if not attachment_ids:
             return []
@@ -481,6 +585,31 @@ class UserScopedStore:
                 db.execute("UPDATE attachments SET conversation_id=? WHERE id=? AND user_id=?", (conversation_id, attachment_id, user_id))
                 found.append(dict(row))
             return found
+
+    def save_evidence(self, user_id: str, conversation_id: str, evidence: dict[str, Any]) -> None:
+        """Bounded structured evidence from a turn that stopped before natural completion --
+        target, sources inspected, observations, unresolved items, receipts, stop reason, and
+        next action. Never raw tool payloads and never hidden reasoning; see
+        app.assistant.build_evidence_snapshot for what is actually stored."""
+        with self.connect() as db:
+            db.execute(
+                """INSERT INTO conversation_evidence(conversation_id,user_id,evidence_json,updated_at) VALUES(?,?,?,?)
+                   ON CONFLICT(conversation_id) DO UPDATE SET evidence_json=excluded.evidence_json,updated_at=excluded.updated_at
+                   WHERE user_id=excluded.user_id""",
+                (conversation_id, user_id, json.dumps(evidence, ensure_ascii=False), utcnow()),
+            )
+
+    def get_evidence(self, user_id: str, conversation_id: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT evidence_json FROM conversation_evidence WHERE conversation_id=? AND user_id=?",
+                (conversation_id, user_id),
+            ).fetchone()
+            return json.loads(row["evidence_json"]) if row else None
+
+    def clear_evidence(self, user_id: str, conversation_id: str) -> None:
+        with self.connect() as db:
+            db.execute("DELETE FROM conversation_evidence WHERE conversation_id=? AND user_id=?", (conversation_id, user_id))
 
     def create_trace(self, trace: dict[str, Any]) -> None:
         with self.connect() as db:

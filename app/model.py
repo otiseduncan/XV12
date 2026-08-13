@@ -31,13 +31,14 @@ class LlamaModel:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         payload = {
             "model": self.settings.model_alias,
             "messages": messages,
             "stream": True,
             "temperature": self.settings.model_temperature,
-            "max_tokens": self.settings.model_max_tokens,
+            "max_tokens": max_tokens if max_tokens is not None else self.settings.model_max_tokens,
         }
         if tools:
             payload["tools"] = tools

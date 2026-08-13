@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import inspect
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -56,6 +57,14 @@ class CapabilityRegistry:
             item.setdefault("role_scope_ceiling", {role: list(item["supported_scopes"]) for role in item["authorization"]["roles"]})
             item.setdefault("failure_semantics", failure_semantics)
             item.setdefault("result_schema", {"type": "object"})
+            # Exposure semantics are three distinct, explicit concepts:
+            #   model_exposed      — the ordinary conversational model receives the function;
+            #   direct_api_exposed — the generic /api/capabilities endpoint may execute it;
+            #   internal_only      — only server-side orchestration (e.g. the Builder loop)
+            #                        may execute it; the public endpoint must refuse.
+            item.setdefault("model_exposed", True)
+            item.setdefault("internal_only", False)
+            item.setdefault("direct_api_exposed", not item["internal_only"])
         self.capabilities = {item["id"]: item for item in self.document["capabilities"]}
         self.permissions = permissions
 
@@ -172,30 +181,68 @@ class CapabilityGateway:
             raise CapabilityNotFound(capability_id)
         self.handlers[capability_id] = handler
 
-    @staticmethod
-    def _validate(arguments: dict[str, Any], schema: dict[str, Any]) -> None:
-        missing = sorted(set(schema.get("required") or []) - set(arguments))
-        if missing:
-            raise ValueError(f"Missing required arguments: {', '.join(missing)}")
-        properties = schema.get("properties") or {}
-        if schema.get("additionalProperties") is False:
-            extra = sorted(set(arguments) - set(properties))
-            if extra:
-                raise ValueError(f"Unexpected arguments: {', '.join(extra)}")
-        types = {"string": str, "integer": int, "boolean": bool, "object": dict, "array": list, "number": (int, float)}
-        for name, value in arguments.items():
-            spec = properties.get(name) or {}
-            expected = types.get(spec.get("type"))
-            if expected and (not isinstance(value, expected) or spec.get("type") == "integer" and isinstance(value, bool)):
-                raise ValueError(f"Argument {name} must be {spec['type']}.")
-            if "enum" in spec and value not in spec["enum"]:
-                raise ValueError(f"Argument {name} is not an allowed value.")
-            if "const" in spec and value != spec["const"]:
-                raise ValueError(f"Argument {name} must equal {spec['const']}.")
-            if isinstance(value, (int, float)) and "minimum" in spec and value < spec["minimum"]:
-                raise ValueError(f"Argument {name} is below its minimum.")
-            if isinstance(value, (int, float)) and "maximum" in spec and value > spec["maximum"]:
-                raise ValueError(f"Argument {name} exceeds its maximum.")
+    _SCHEMA_TYPES = {"string": str, "integer": int, "boolean": bool, "object": dict, "array": list, "number": (int, float), "null": type(None)}
+    _SCHEMA_MAX_DEPTH = 12
+
+    @classmethod
+    def _validate_value(cls, value: Any, spec: dict[str, Any], label: str, depth: int = 0) -> None:
+        """Complete bounded validator for the JSON Schema subset the XV12 registry declares.
+        The registry is an execution contract: every constraint a capability declares is
+        enforced here, recursively, before its handler runs."""
+        if depth > cls._SCHEMA_MAX_DEPTH:
+            raise ValueError(f"{label} exceeds the supported schema nesting depth.")
+        if not isinstance(spec, dict):
+            return
+        declared = spec.get("type")
+        if declared:
+            expected = cls._SCHEMA_TYPES.get(declared)
+            if expected is None:
+                raise ValueError(f"{label} declares unsupported schema type {declared!r}.")
+            if not isinstance(value, expected) or (declared in {"integer", "number"} and isinstance(value, bool)):
+                raise ValueError(f"{label} must be {declared}.")
+        if "enum" in spec and value not in spec["enum"]:
+            raise ValueError(f"{label} is not an allowed value.")
+        if "const" in spec and value != spec["const"]:
+            raise ValueError(f"{label} must equal {spec['const']!r}.")
+        if isinstance(value, bool):
+            return
+        if isinstance(value, (int, float)):
+            if "minimum" in spec and value < spec["minimum"]:
+                raise ValueError(f"{label} is below its minimum of {spec['minimum']}.")
+            if "maximum" in spec and value > spec["maximum"]:
+                raise ValueError(f"{label} exceeds its maximum of {spec['maximum']}.")
+        if isinstance(value, str):
+            if "minLength" in spec and len(value) < int(spec["minLength"]):
+                raise ValueError(f"{label} is shorter than its minLength of {spec['minLength']}.")
+            if "maxLength" in spec and len(value) > int(spec["maxLength"]):
+                raise ValueError(f"{label} exceeds its maxLength of {spec['maxLength']}.")
+            if "pattern" in spec and not re.search(str(spec["pattern"]), value):
+                raise ValueError(f"{label} does not match its required pattern.")
+        if isinstance(value, list):
+            if "minItems" in spec and len(value) < int(spec["minItems"]):
+                raise ValueError(f"{label} has fewer than its minItems of {spec['minItems']}.")
+            if "maxItems" in spec and len(value) > int(spec["maxItems"]):
+                raise ValueError(f"{label} exceeds its maxItems of {spec['maxItems']}.")
+            items_spec = spec.get("items")
+            if isinstance(items_spec, dict):
+                for index, item in enumerate(value):
+                    cls._validate_value(item, items_spec, f"{label}[{index}]", depth + 1)
+        if isinstance(value, dict):
+            properties = spec.get("properties") or {}
+            missing = sorted(set(spec.get("required") or []) - set(value))
+            if missing:
+                raise ValueError(f"{label} is missing required properties: {', '.join(missing)}.")
+            if spec.get("additionalProperties") is False:
+                extra = sorted(set(value) - set(properties))
+                if extra:
+                    raise ValueError(f"{label} has unexpected properties: {', '.join(extra)}.")
+            for name, item in value.items():
+                if name in properties:
+                    cls._validate_value(item, properties[name], f"{label}.{name}", depth + 1)
+
+    @classmethod
+    def _validate(cls, arguments: dict[str, Any], schema: dict[str, Any]) -> None:
+        cls._validate_value(arguments, schema, "arguments")
 
     @staticmethod
     def _attach_evidence_contract(result: dict[str, Any], capability_id: str) -> dict[str, Any]:
@@ -242,6 +289,17 @@ class CapabilityGateway:
                     "invalid_request": "invalid_arguments", "failed": "execution_error",
                 }.get(domain_status, "success")
                 result = {**result, "status": mapped, "domain_status": domain_status}
+            # The declared result_schema is part of the execution contract: a handler that
+            # returns a shape violating its own declaration is an execution error, reported
+            # safely rather than passed to the model as trustworthy evidence.
+            try:
+                self._validate_value(result, capability.get("result_schema") or {}, "result")
+            except ValueError as contract_error:
+                return {
+                    "status": "execution_error",
+                    "error": "result_contract_violation",
+                    "message": str(contract_error)[:500],
+                }, decision
             if result["status"] in {"success", "partial_success", "no_result"}:
                 result = self._attach_evidence_contract(result, capability_id)
             if self.audit_logger and user.get("role") == "admin":

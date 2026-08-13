@@ -13,24 +13,26 @@ The Creator stack is a modular service layer behind the existing versioned capab
 - `GitService` uses fixed argv operations inside owned workspaces. Pull is fast-forward-only and push has no force/refspec interface.
 - `SecretsBroker` stores environment-variable references and permitted contexts only. Resolution occurs internally at execution time.
 - `MediaService` provides provider-neutral image/edit/video contracts. Generated files enter the existing Artifact Store.
-- `BuilderExecutionService` runs complete website/application work behind one high-level chat capability while preserving the ordinary conversation loop's four-round safety boundary.
+- `BuilderExecutionService` runs complete website/application work behind one high-level chat capability while preserving the ordinary conversation loop's own independent, bounded orchestration (model rounds, operations, wall time, and duplicate-call suppression tracked separately -- see `app/assistant.py`).
 
 ## Capability surface
 
-The 4.1.0 registry includes:
+The 4.3.0 registry includes:
 
 - Jobs: `job.status`, `job.cancel`.
-- Builder: high-level `builder.session.execute` plus the retained low-level `builder.workspace.create/open/inspect`, `builder.files.read/patch/batch`, `builder.sandbox.exec`, `builder.preview.start/status/stop`, and `builder.project.archive` primitives.
+- Builder: high-level `builder.session.execute` plus the retained low-level `builder.workspace.create/open/inspect`, `builder.files.read/patch/batch`, `builder.code.search/map`, `builder.task_state.update`, `builder.sandbox.exec`, `builder.preview.start/status/stop`, and `builder.project.archive` primitives.
 - Browser validation: `browser.preview.inspect`, `browser.preview.screenshot`.
 - Git: `git.status`, `git.diff`, `git.commit`, `git.pull`, `git.push`.
 - Secrets: `secrets.reference.configure`, `secrets.reference.status`.
 - Media: `media.image.status`, `media.image.generate`, `media.image.edit`, `media.video.generate`.
+- Engineering (admin-only, read-only repository inspection for ordinary conversation): `engineering.repo.map`, `engineering.code.search`, `engineering.files.read/batch_read`, `engineering.git.status/diff`, `engineering.tests.inspect`. No shell, writes, Docker, or build/test execution -- that remains Builder's responsibility.
+- Files: `files.local.read/write/modify/batch_read`, scoped per authenticated user (admin retains configured repository-wide read roots; normal users are limited to their own managed and attachment areas, with secret/credential paths denied for every role).
 
 Every operation still passes through registry schema validation, role/risk authorization, user ownership checks, and the Capability Gateway evidence contract.
 
 ## Durable Builder Execution Sessions
 
-Ordinary X conversation turns remain limited to four model/tool rounds. Complete website and application requests should select `builder.session.execute` once; low-level Builder primitives are no longer advertised to the ordinary conversation model, but remain registered and callable for explicit diagnostics, tests, and advanced operations.
+Ordinary X conversation turns use their own bounded orchestrator (`ASSISTANT_MODEL_ROUND_LIMIT`, `ASSISTANT_HARD_OPERATION_LIMIT`, and a wall-time bound in `app/assistant.py`) with a mandatory tools-disabled final synthesis whenever a bound is reached, so a turn that stops early still returns a grounded answer instead of a naked limit message. Complete website and application requests should select `builder.session.execute` once; low-level Builder primitives are no longer advertised to the ordinary conversation model, but remain registered and callable for explicit diagnostics, tests, and advanced operations.
 
 The high-level capability creates or resumes one user-owned workspace and queues a persisted Creator job. The same configured XODUZ/Qwen model then directs a focused internal engineering loop containing only owned workspace, files, sandbox, preview, browser-validation, archive, and read-only Git inspection tools. The deterministic service owns authorization, isolation, persistence, cancellation, evidence gates, and limits; it does not choose the application design or generate a canned template.
 

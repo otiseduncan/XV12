@@ -46,6 +46,33 @@ def test_context_priorities_protect_identity_user_subject_and_recent(client, app
 
 
 @pytest.mark.context
+def test_context_budget_reserves_space_for_tool_schemas(client, app):
+    user = login(client, "admin")
+    conversation = create_conversation(client)
+    app.state.store.add_message(user["id"], conversation["id"], "user", "Short message.")
+    from app.context import ContextAssembler
+
+    with_tools = app.state.context.assemble(user, conversation["id"])
+    without_tools = ContextAssembler(app.state.store, app.state.context.context_limit, registry=None).assemble(user, conversation["id"])
+    assert with_tools.estimated_tokens <= without_tools.estimated_tokens
+    assert app.state.context.registry is not None
+
+
+@pytest.mark.context
+def test_oversized_newest_message_does_not_silently_exceed_the_budget(client, app):
+    from app.context import ContextAssembler, estimate_tokens
+
+    user = login(client, "admin")
+    conversation = create_conversation(client)
+    tiny_context = ContextAssembler(app.state.store, 2000, registry=None)
+    huge_text = "x" * 40000  # far larger than any plausible remaining budget at a 2000-token context limit
+    app.state.store.add_message(user["id"], conversation["id"], "user", huge_text)
+    assembled = tiny_context.assemble(user, conversation["id"])
+    assert "recent_conversation" not in assembled.sections
+    assert estimate_tokens(huge_text) > tiny_context.context_limit
+
+
+@pytest.mark.context
 def test_rolling_summary_compacts_older_turns(client, app):
     user = login(client)
     conversation = create_conversation(client)

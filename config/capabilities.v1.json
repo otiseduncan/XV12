@@ -1,5 +1,5 @@
 {
-  "registry_version": "4.2.0",
+  "registry_version": "4.3.0",
   "capabilities": [
     {
       "id": "system.health.read", "family": "system",
@@ -72,6 +72,70 @@
       "supported_scopes": ["modify"], "operation_scope": "modify", "classification": "modify", "role_scope_ceiling": {"admin": ["modify"], "user": ["modify"]},
       "arguments_schema": {"type": "object", "required": ["path", "content", "expected_sha256"], "properties": {"path": {"type": "string"}, "content": {"type": "string", "maxLength": 524288}, "expected_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, "additionalProperties": false},
       "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "user-managed-local-files", "idempotency": "optimistic-sha256"
+    },
+    {
+      "id": "files.local.batch_read", "family": "files", "family_label": "Local Files", "family_description": "Bounded structured local filesystem access without shell execution.",
+      "description": "Read several small user-authorized files in one bounded call instead of one call per file. Each entry may specify start_line/end_line for a ranged read.",
+      "version": "1.0.0", "risk_tier": 0, "authorization": {"roles": ["admin", "user"]},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"], "user": ["read"]},
+      "arguments_schema": {"type": "object", "required": ["files"], "properties": {"files": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}}, "additionalProperties": false}}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "bounded-local-files", "idempotency": "safe"
+    },
+    {
+      "id": "engineering.repo.map", "family": "engineering", "family_label": "Engineering Inspection", "family_description": "Read-only repository inspection for ordinary conversation: map, search, ranged reads, Git state, and test inventory. No shell, no writes, no Docker, no build/test execution -- that remains Builder's responsibility.",
+      "description": "Map a configured repository root: manifests, likely entry points, source directories, test files, and docs. Use to orient before searching or reading specific files.",
+      "version": "1.0.0", "risk_tier": 0, "internal_only": false, "authorization": {"roles": ["admin"]},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"]},
+      "arguments_schema": {"type": "object", "properties": {"path": {"type": "string", "maxLength": 500}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 20, "health": "available", "execution_environment": "bounded-repo-inspection", "idempotency": "safe"
+    },
+    {
+      "id": "engineering.code.search", "family": "engineering", "family_label": "Engineering Inspection", "family_description": "Read-only repository inspection for ordinary conversation: map, search, ranged reads, Git state, and test inventory. No shell, no writes, no Docker, no build/test execution -- that remains Builder's responsibility.",
+      "description": "Search source text, a regular expression, or filenames within a configured repository root.",
+      "version": "1.0.0", "risk_tier": 0, "internal_only": false, "authorization": {"roles": ["admin"]},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"]},
+      "arguments_schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 300}, "mode": {"type": "string", "enum": ["text", "regex", "filename"]}, "path_glob": {"type": "string", "maxLength": 200}, "path": {"type": "string", "maxLength": 500}, "limit": {"type": "integer", "minimum": 1, "maximum": 60}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 25, "health": "available", "execution_environment": "bounded-repo-inspection", "idempotency": "safe"
+    },
+    {
+      "id": "engineering.files.read", "family": "engineering", "family_label": "Engineering Inspection", "family_description": "Read-only repository inspection for ordinary conversation: map, search, ranged reads, Git state, and test inventory. No shell, no writes, no Docker, no build/test execution -- that remains Builder's responsibility.",
+      "description": "Read a bounded, line-numbered range of a specific repository file. Use start_line/end_line to continue reading a large file without dumping it whole.",
+      "version": "1.0.0", "risk_tier": 0, "internal_only": false, "authorization": {"roles": ["admin"]},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"]},
+      "arguments_schema": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "maxLength": 500}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 10, "health": "available", "execution_environment": "bounded-repo-inspection", "idempotency": "safe"
+    },
+    {
+      "id": "engineering.files.batch_read", "family": "engineering", "family_label": "Engineering Inspection", "family_description": "Read-only repository inspection for ordinary conversation: map, search, ranged reads, Git state, and test inventory. No shell, no writes, no Docker, no build/test execution -- that remains Builder's responsibility.",
+      "description": "Read several small repository files in one bounded call instead of spending one round per tiny file.",
+      "version": "1.0.0", "risk_tier": 0, "internal_only": false, "authorization": {"roles": ["admin"]},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"]},
+      "arguments_schema": {"type": "object", "required": ["files"], "properties": {"files": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}}, "additionalProperties": false}}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 15, "health": "available", "execution_environment": "bounded-repo-inspection", "idempotency": "safe"
+    },
+    {
+      "id": "engineering.git.status", "family": "engineering", "family_label": "Engineering Inspection", "family_description": "Read-only repository inspection for ordinary conversation: map, search, ranged reads, Git state, and test inventory. No shell, no writes, no Docker, no build/test execution -- that remains Builder's responsibility.",
+      "description": "Read Git status, HEAD, and recent commits for a configured repository root.",
+      "version": "1.0.0", "risk_tier": 0, "internal_only": false, "authorization": {"roles": ["admin"]},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"]},
+      "arguments_schema": {"type": "object", "properties": {"path": {"type": "string", "maxLength": 500}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 15, "health": "available", "execution_environment": "bounded-repo-inspection", "idempotency": "safe"
+    },
+    {
+      "id": "engineering.git.diff", "family": "engineering", "family_label": "Engineering Inspection", "family_description": "Read-only repository inspection for ordinary conversation: map, search, ranged reads, Git state, and test inventory. No shell, no writes, no Docker, no build/test execution -- that remains Builder's responsibility.",
+      "description": "Read the current uncommitted Git diff (or diff --stat) for a configured repository root.",
+      "version": "1.0.0", "risk_tier": 0, "internal_only": false, "authorization": {"roles": ["admin"]},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"]},
+      "arguments_schema": {"type": "object", "properties": {"path": {"type": "string", "maxLength": 500}, "stat_only": {"type": "boolean"}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 20, "health": "available", "execution_environment": "bounded-repo-inspection", "idempotency": "safe"
+    },
+    {
+      "id": "engineering.tests.inspect", "family": "engineering", "family_label": "Engineering Inspection", "family_description": "Read-only repository inspection for ordinary conversation: map, search, ranged reads, Git state, and test inventory. No shell, no writes, no Docker, no build/test execution -- that remains Builder's responsibility.",
+      "description": "Inventory test files in a configured repository root with a bounded count of detected test definitions per file. Does not execute tests.",
+      "version": "1.0.0", "risk_tier": 0, "internal_only": false, "authorization": {"roles": ["admin"]},
+      "supported_scopes": ["read"], "operation_scope": "read", "classification": "read", "role_scope_ceiling": {"admin": ["read"]},
+      "arguments_schema": {"type": "object", "properties": {"path": {"type": "string", "maxLength": 500}}, "additionalProperties": false},
+      "result_schema": {"type": "object"}, "timeout_seconds": 20, "health": "available", "execution_environment": "bounded-repo-inspection", "idempotency": "safe"
     },
     {
       "id": "adas.si.inventory.read", "family": "adas_si", "family_label": "ADAS SI", "family_description": "Authoritative ADAS service information and managed records.",

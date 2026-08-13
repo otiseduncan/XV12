@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import uuid
@@ -17,6 +18,13 @@ PARAMETER_BLOCK = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 TEXT_TOOL_PREFIX_WINDOW = 256
+
+
+def _accepts_max_tokens(model: Any) -> bool:
+    try:
+        return "max_tokens" in inspect.signature(model.stream_events).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def artifact_followup_arguments(message: str, allowed_names: set[str]) -> dict[str, Any] | None:
@@ -104,6 +112,7 @@ class ToolCallCompatibilityModel:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         allowed_names = {
             str(item.get("function", {}).get("name") or "")
@@ -116,7 +125,8 @@ class ToolCallCompatibilityModel:
         pending = ""
         capturing = False
         emitted_tool_call = False
-        async for event in self.model.stream_events(messages, tools=tools):
+        inner = self.model.stream_events(messages, tools=tools, max_tokens=max_tokens) if _accepts_max_tokens(self.model) else self.model.stream_events(messages, tools=tools)
+        async for event in inner:
             if event.get("type") != "content" or not allowed_names:
                 if event.get("type") == "tool_call":
                     emitted_tool_call = True

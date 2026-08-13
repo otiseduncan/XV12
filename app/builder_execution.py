@@ -665,6 +665,38 @@ class BuilderExecutionService:
         return kept
 
     @staticmethod
+    def _group_aware_tail(body: list[dict[str, Any]], minimum_messages: int) -> list[dict[str, Any]]:
+        """Select a tail of at least `minimum_messages` messages without ever splitting an
+        assistant tool-calls message from its own tool result messages. A blind positional
+        slice can start mid-exchange, producing an orphaned role=tool message with no
+        preceding assistant message declaring its call -- rejected by an OpenAI-style chat
+        completions API. Whole exchanges are kept together instead, even if that means
+        keeping a few messages more than the minimum."""
+        groups: list[list[dict[str, Any]]] = []
+        index = 0
+        while index < len(body):
+            message = body[index]
+            if message.get("role") == "assistant" and message.get("tool_calls"):
+                call_ids = {str(call.get("id")) for call in message["tool_calls"]}
+                group = [message]
+                index += 1
+                while index < len(body) and body[index].get("role") == "tool" and str(body[index].get("tool_call_id")) in call_ids:
+                    group.append(body[index])
+                    index += 1
+                groups.append(group)
+            else:
+                groups.append([message])
+                index += 1
+        tail_groups: list[list[dict[str, Any]]] = []
+        count = 0
+        for group in reversed(groups):
+            tail_groups.insert(0, group)
+            count += len(group)
+            if count >= minimum_messages:
+                break
+        return [message for group in tail_groups for message in group]
+
+    @staticmethod
     async def _summarize_engineering_history(
         model: Any, session: dict[str, Any], messages: list[dict[str, Any]],
     ) -> str:
@@ -714,8 +746,8 @@ class BuilderExecutionService:
 
         system = messages[:1]
         body = messages[1:]
-        raw_tail = body[-BUILDER_RAW_TAIL_MESSAGES:]
-        older = body[:-BUILDER_RAW_TAIL_MESSAGES]
+        raw_tail = self._group_aware_tail(body, BUILDER_RAW_TAIL_MESSAGES)
+        older = body[: len(body) - len(raw_tail)]
         pruned = self._drop_redundant(older)
         summary_text = await self._summarize_engineering_history(model, session, pruned) if pruned else ""
 

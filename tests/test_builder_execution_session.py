@@ -535,18 +535,32 @@ def test_builder_restart_reconciliation_is_truthful(app, client):
 
 
 @pytest.mark.x_core
-def test_ordinary_chat_tool_bound_is_still_four_rounds(app, client):
+def test_ordinary_chat_tool_loop_is_bounded_by_round_limit_with_final_synthesis(app, client):
+    """Superseded the old fixed four-round cutoff: the ordinary orchestrator now uses
+    independent model-round/operation/wall-time bounds (see ASSISTANT_MODEL_ROUND_LIMIT in
+    app/assistant.py and tests/test_assistant_synthesis.py) and never leaves the user with a
+    naked "safe tool-call limit" string -- a bound always triggers one tools-disabled
+    synthesis call over the evidence gathered so far."""
+    from app.assistant import ASSISTANT_MODEL_ROUND_LIMIT
+
     class LoopingModel:
         calls = 0
 
         async def stream_events(self, _messages, tools=None):
             self.calls += 1
-            yield {"type": "tool_call", "id": str(uuid.uuid4()), "name": "system_health_read", "arguments": "{}"}
+            if tools:
+                yield {"type": "tool_call", "id": str(uuid.uuid4()), "name": "system_health_read", "arguments": "{}"}
+            else:
+                yield {"type": "content", "text": "Here is a grounded summary of what the health checks showed before I stopped."}
 
     login(client, "admin")
     conversation = create_conversation(client)
     model = LoopingModel()
     app.state.model = model
     response = client.post(f"/api/conversations/{conversation['id']}/stream", json={"message": "Loop tools"})
-    assert model.calls == 4
-    assert "I reached the safe tool-call limit before I could finish that request." in response.text
+    assert model.calls == ASSISTANT_MODEL_ROUND_LIMIT + 1
+    assert "I reached the safe tool-call limit before I could finish that request." not in response.text
+    assert "grounded summary" in response.text
+    stored = client.get(f"/api/conversations/{conversation['id']}").json()
+    assert stored["messages"][-1]["status"] == "partial_success"
+    assert stored["messages"][-1]["metadata"]["stop_reason"] == "model_round_limit"

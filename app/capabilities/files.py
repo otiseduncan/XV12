@@ -1,27 +1,111 @@
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 from pathlib import Path
 from typing import Any
 
 
-class LocalFilesCapability:
-    """Structured filesystem access with bounded roots and managed-only mutations."""
+# Central deterministic secret/private path policy for model-directed filesystem access.
+# This guards the capability surface only: internal application code that loads its own
+# configuration (app.config reading config/.env.local) never passes through this module.
+SENSITIVE_NAME_PATTERNS = (
+    ".env", ".env.*", "*.pem", "*.key", "*.ppk", "*.pfx", "*.p12",
+    "id_rsa*", "id_ed25519*", "id_ecdsa*", "id_dsa*",
+    "credentials*", "*.credentials", "service-account*.json",
+    "token*", "*.token", "*secret*", "*password*", "*.keystore", "*.jks",
+    "*.db", "*.sqlite", "*.sqlite3",
+)
+SENSITIVE_DIR_NAMES = {".ssh", ".gnupg", "secrets"}
 
-    def __init__(self, read_roots: list[Path], managed_root: Path, artifacts: Any | None = None) -> None:
+RANGED_READ_MAX_BYTES = 4_000_000
+RANGED_READ_MAX_LINES = 400
+BATCH_READ_MAX_FILES = 8
+BATCH_READ_FILE_CHAR_LIMIT = 6000
+BATCH_READ_TOTAL_CHAR_LIMIT = 24_000
+
+
+class SensitivePathError(PermissionError):
+    """Raised when a capability-surface read targets a secret or credential path."""
+
+
+def is_sensitive_path(path: Path) -> bool:
+    name = path.name.casefold()
+    if any(part.casefold() in SENSITIVE_DIR_NAMES for part in path.parts):
+        return True
+    return any(fnmatch.fnmatch(name, pattern) for pattern in SENSITIVE_NAME_PATTERNS)
+
+
+def guard_sensitive_path(path: Path) -> None:
+    if is_sensitive_path(path):
+        raise SensitivePathError(
+            "This path matches the protected secret/credential policy and cannot be read through file capabilities."
+        )
+
+
+def read_text_range(path: Path, start_line: int, end_line: int) -> dict[str, Any]:
+    """Deterministic bounded ranged read with line numbers and continuation metadata.
+    Shared by the user-facing Local Files capability and the admin engineering surface."""
+    data = path.read_bytes()
+    if len(data) > RANGED_READ_MAX_BYTES:
+        data = data[:RANGED_READ_MAX_BYTES]
+    text = data.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    total = len(lines)
+    start = max(1, start_line)
+    end = min(total, end_line if end_line >= start else start + RANGED_READ_MAX_LINES - 1)
+    end = min(end, start + RANGED_READ_MAX_LINES - 1)
+    window = lines[start - 1:end]
+    numbered = "\n".join(f"{start + offset}: {line}" for offset, line in enumerate(window))
+    return {
+        "content": numbered,
+        "start_line": start,
+        "end_line": start + len(window) - 1 if window else start,
+        "total_lines": total,
+        "has_more": end < total,
+        "next_start_line": end + 1 if end < total else None,
+    }
+
+
+class LocalFilesCapability:
+    """Structured filesystem access with bounded roots and managed-only mutations.
+
+    Read authorization is enforced deterministically per authenticated user:
+    - admin retains the explicitly configured repository-wide inspection roots;
+    - normal users may read only their own managed files and their own attachments.
+    Secret/credential paths are denied for every role at this capability surface.
+    """
+
+    def __init__(
+        self,
+        read_roots: list[Path],
+        managed_root: Path,
+        artifacts: Any | None = None,
+        attachments_root: Path | None = None,
+    ) -> None:
         self.read_roots = [path.resolve() for path in read_roots]
         self.managed_root = managed_root.resolve()
         self.artifacts = artifacts
+        self.attachments_root = attachments_root.resolve() if attachments_root else None
         self.managed_root.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _within(path: Path, roots: list[Path]) -> bool:
         return any(path == root or path.is_relative_to(root) for root in roots)
 
-    def _read_path(self, raw: str) -> Path:
+    def _authorized_read_roots(self, user: dict[str, Any]) -> list[Path]:
+        if user.get("role") == "admin":
+            return self.read_roots
+        roots = [self.managed_root / str(user.get("id") or "")]
+        if self.attachments_root:
+            roots.append(self.attachments_root / str(user.get("id") or ""))
+        return [root.resolve() for root in roots]
+
+    def _read_path(self, raw: str, user: dict[str, Any]) -> Path:
         path = Path(raw).resolve()
-        if not self._within(path, self.read_roots):
-            raise ValueError("Path is outside configured read roots.")
+        if not self._within(path, self._authorized_read_roots(user)):
+            raise ValueError("Path is outside the read roots authorized for this user.")
+        guard_sensitive_path(path)
         return path
 
     def _managed_path(self, raw: str, user: dict[str, Any]) -> Path:
@@ -57,22 +141,68 @@ class LocalFilesCapability:
         except ValueError:
             return []
 
-    def read(self, arguments: dict[str, Any], _user: dict[str, Any]) -> dict[str, Any]:
-        path = self._read_path(str(arguments.get("path") or ""))
+    def read(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        try:
+            path = self._read_path(str(arguments.get("path") or ""), user)
+        except (SensitivePathError, ValueError) as error:
+            return {"status": "permission_denied", "message": str(error)}
         if not path.exists():
             return {"status": "no_result", "path": str(path)}
         if path.is_dir():
             limit = min(max(int(arguments.get("limit") or 100), 1), 250)
             items = []
-            for item in sorted(path.iterdir(), key=lambda value: value.name.casefold())[:limit]:
+            for item in sorted(path.iterdir(), key=lambda value: value.name.casefold())[: limit * 2]:
+                if is_sensitive_path(item):
+                    continue
                 items.append({"name": item.name, "path": str(item), "kind": "directory" if item.is_dir() else "file", "bytes": item.stat().st_size if item.is_file() else None})
+                if len(items) >= limit:
+                    break
             return {"status": "success", "path": str(path), "items": items, "truncated": len(items) == limit}
         maximum = min(max(int(arguments.get("max_bytes") or 131072), 1), 524288)
         data = path.read_bytes()
         if b"\x00" in data[:4096]:
-            return {"status": "partial_success", **self._metadata(path), "message": "Binary file metadata returned; content was not decoded.", "artifacts": self._artifact(path, _user, arguments=arguments)}
+            return {"status": "partial_success", **self._metadata(path), "message": "Binary file metadata returned; content was not decoded.", "artifacts": self._artifact(path, user, arguments=arguments)}
+        if arguments.get("start_line"):
+            ranged = read_text_range(path, int(arguments["start_line"]), int(arguments.get("end_line") or 0))
+            return {"status": "success", **self._metadata(path), **ranged,
+                    "truncated": ranged["has_more"], "artifacts": self._artifact(path, user, ranged["content"], arguments)}
         content = data[:maximum].decode("utf-8", errors="replace")
-        return {"status": "success", **self._metadata(path), "content": content, "truncated": len(data) > maximum, "artifacts": self._artifact(path, _user, content, arguments)}
+        return {"status": "success", **self._metadata(path), "content": content, "truncated": len(data) > maximum, "artifacts": self._artifact(path, user, content, arguments)}
+
+    def batch_read(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        """Bounded multi-file read so one audit does not spend an agent round per tiny file."""
+        requests = arguments.get("files") or []
+        if not isinstance(requests, list) or not requests:
+            raise ValueError("files must be a non-empty array of read requests.")
+        results: list[dict[str, Any]] = []
+        total_chars = 0
+        for item in requests[:BATCH_READ_MAX_FILES]:
+            raw = str((item or {}).get("path") or "")
+            entry: dict[str, Any] = {"path": raw}
+            try:
+                path = self._read_path(raw, user)
+                if not path.is_file():
+                    entry.update({"status": "no_result"})
+                elif b"\x00" in path.read_bytes()[:4096]:
+                    entry.update({"status": "partial_success", "message": "Binary file skipped in batch read."})
+                else:
+                    start = int((item or {}).get("start_line") or 1)
+                    end = int((item or {}).get("end_line") or 0)
+                    ranged = read_text_range(path, start, end if end else start + RANGED_READ_MAX_LINES - 1)
+                    content = ranged["content"][:BATCH_READ_FILE_CHAR_LIMIT]
+                    entry.update({"status": "success", **ranged, "content": content})
+            except (SensitivePathError, ValueError) as error:
+                entry.update({"status": "permission_denied", "message": str(error)[:300]})
+            except OSError as error:
+                entry.update({"status": "invalid_arguments", "message": str(error)[:300]})
+            total_chars += len(str(entry.get("content") or ""))
+            if total_chars > BATCH_READ_TOTAL_CHAR_LIMIT:
+                entry["content"] = str(entry.get("content") or "")[: max(0, BATCH_READ_TOTAL_CHAR_LIMIT - (total_chars - len(str(entry.get("content") or ""))))]
+                entry["truncated"] = True
+                results.append(entry)
+                break
+            results.append(entry)
+        return {"status": "success", "files": results, "files_requested": len(requests), "files_returned": len(results)}
 
     def write(self, arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         path = self._managed_path(str(arguments.get("path") or ""), user)

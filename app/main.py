@@ -17,12 +17,14 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Respon
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from pypdf import PdfReader
 
 from .auth import create_auth_router, current_user
-from .assistant import AssistantOrchestrator
+from .assistant import AssistantOrchestrator, build_evidence_snapshot
 from .artifacts import ArtifactStore, ConversationContextMiddleware, active_conversation_id, active_user_message, create_artifact_router
 from .capabilities.adas_si import AdasSICapability
 from .capabilities.calibration_iq import CalibrationIQCapability
+from .capabilities.engineering import RepoInspectionService
 from .capabilities.files import LocalFilesCapability
 from .config import Settings
 from .context import ContextAssembler
@@ -96,6 +98,57 @@ def _file_sha256(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+# Bounded, content-aware attachment ingestion. Text-like source files get a direct inline
+# excerpt; PDFs get a short excerpt from their first pages plus a real registered artifact so
+# existing page-ranged artifact tooling (adas/local-files pattern) covers the rest of the
+# document. Never an indiscriminate full-file dump into the prompt.
+ATTACHMENT_TEXT_SUFFIXES = {
+    ".txt", ".md", ".json", ".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
+    ".css", ".html", ".htm", ".log", ".yml", ".yaml", ".csv", ".ini", ".toml",
+}
+ATTACHMENT_INGEST_FILE_LIMIT = 3
+ATTACHMENT_EXCERPT_CHAR_LIMIT = 3000
+ATTACHMENT_TOTAL_EXCERPT_CHAR_LIMIT = 8000
+ATTACHMENT_PDF_EXCERPT_PAGES = 3
+
+
+def _resolve_attachment_path(settings: Settings, storage_path: str) -> Path | None:
+    """storage_path is written root-relative when attachments_path sits under settings.root
+    (the normal production layout), or attachments_path-relative with a leading 'attachments'
+    marker segment otherwise (e.g. an isolated test environment) -- see the two branches in
+    upload_attachment. Resolve whichever form actually produced the file, and always require
+    the result to still be inside the owned attachments root."""
+    owned_root = settings.attachments_path.resolve()
+    candidate = (settings.root / storage_path).resolve()
+    if candidate.is_relative_to(owned_root) and candidate.is_file():
+        return candidate
+    relative = Path(storage_path)
+    if relative.parts and relative.parts[0] == "attachments":
+        relative = Path(*relative.parts[1:]) if len(relative.parts) > 1 else Path()
+    fallback = (settings.attachments_path / relative).resolve()
+    if fallback.is_relative_to(owned_root) and fallback.is_file():
+        return fallback
+    return None
+
+
+def _ingest_attachment_excerpt(path: Path, content_type: str) -> str:
+    suffix = path.suffix.casefold()
+    try:
+        if suffix == ".pdf" or content_type == "application/pdf":
+            reader = PdfReader(str(path), strict=False)
+            pages = min(len(reader.pages), ATTACHMENT_PDF_EXCERPT_PAGES)
+            text = "\n\n".join((reader.pages[index].extract_text() or "") for index in range(pages))
+            return text[:ATTACHMENT_EXCERPT_CHAR_LIMIT]
+        if suffix in ATTACHMENT_TEXT_SUFFIXES or content_type.startswith("text/"):
+            data = path.read_bytes()[:200_000]
+            if b"\x00" in data[:4096]:
+                return ""
+            return data.decode("utf-8", errors="replace")[:ATTACHMENT_EXCERPT_CHAR_LIMIT]
+    except Exception:
+        return ""
+    return ""
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.load()
     store = EnrollmentStore(settings.database_path, settings.owner_google_sub, settings)
@@ -113,17 +166,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     artifact_store.initialize()
     creator_platform = CreatorPlatform(capability_data / "creator", artifact_store, settings)
 
+    _WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\s\"']+")
+    _ENGINEERING_TOOL_FLOOR = {"system.health.read", "artifact.recent.read", "project.list"}
+    _BUILD_REQUEST_PHRASES = (
+        "build me", "build a website", "build a web app", "build an app", "build a landing page",
+        "create a website", "create a web app", "create an app", "modify the website", "modify my app",
+        "modify the app", "update the website", "update my app",
+    )
+
+    def narrow_tools_for_strong_signal(items: list[dict[str, Any]], message: str) -> list[dict[str, Any]]:
+        """Deterministic relevance narrowing: reduce tool noise when the request carries one
+        unambiguous strong signal (an explicit filesystem path, a named service by name, or an
+        explicit build/modify request). Simple keyword/pattern matching only -- never a brittle
+        intent classifier -- and only narrows the offered tool set; the model still owns
+        response wording and whether to call anything at all. Ambiguous or signal-free
+        requests are left untouched so ordinary conversation is never over-narrowed."""
+        folded = message.casefold()
+        has_path = bool(_WINDOWS_PATH_RE.search(message))
+        has_calibration_iq = "calibration iq" in folded
+        has_adas = "adas" in folded
+        has_build_request = any(phrase in folded for phrase in _BUILD_REQUEST_PHRASES)
+        signals = (has_path, has_calibration_iq, has_adas, has_build_request)
+        if sum(1 for signal in signals if signal) != 1:
+            return items
+        if has_path:
+            keep_families = {"engineering", "files"}
+        elif has_calibration_iq:
+            keep_families = {"calibration_iq"}
+        elif has_adas:
+            keep_families = {"adas_si"}
+        else:
+            keep_families = {"builder"}
+        return [item for item in items if item["id"] in _ENGINEERING_TOOL_FLOOR or item.get("family") in keep_families]
+
     def filter_model_tools(items: list[dict[str, Any]], user: dict[str, Any]) -> list[dict[str, Any]]:
         conversation_id = active_conversation_id()
-        message = active_user_message().casefold().strip()
+        raw_message = active_user_message()
+        message = raw_message.casefold().strip()
         referential_action = any(action in message for action in ("display", "open", "view", "print", "download", "copy", "show"))
         referential_object = any(reference in message for reference in ("the document", "that document", "this document", "whole document", "entire document", "full document", "the file", "that file", "the pdf", "that pdf", "this pdf", "that page", "this page", "the section", "that section", "this section", "whole section", "entire section", "next page", "previous page", "print it", "download it", "copy it", "open it", "display it")) or bool(re.search(r"\bpage\s+\d+\b|\b(?:whole|entire|complete|full)\b.*\bsection\b", message))
         asks_for_new_source = any(phrase in message for phrase in ("another document", "different document", "new document", "search for", "find a document"))
         has_recent = bool(conversation_id and artifact_store.recent_records(user["id"], conversation_id, "", 1))
-        if not (referential_action and referential_object and has_recent and not asks_for_new_source):
-            return items
-        retrieval_ids = {"adas.si.search", "adas.knowledge.search", "web.current.search", "files.local.read"}
-        return [item for item in items if item["id"] not in retrieval_ids]
+        if referential_action and referential_object and has_recent and not asks_for_new_source:
+            retrieval_ids = {"adas.si.search", "adas.knowledge.search", "web.current.search", "files.local.read"}
+            items = [item for item in items if item["id"] not in retrieval_ids]
+        return narrow_tools_for_strong_signal(items, raw_message)
 
     registry.model_tool_filter = filter_model_tools
     gateway = CapabilityGateway(registry)
@@ -131,11 +218,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         [settings.root, Path(r"X:\ADAS SI"), settings.calibration_iq_project_path],
         capability_data / "files",
         artifact_store,
+        attachments_root=settings.attachments_path,
     )
+    engineering_service = RepoInspectionService([settings.root, Path(r"X:\ADAS SI"), settings.calibration_iq_project_path])
     adas_si_capability = AdasSICapability(Path(r"X:\ADAS SI"), capability_data / "adas_si" / "index.sqlite", artifact_store)
     calibration_iq_capability = CalibrationIQCapability(settings)
     model = ToolCallCompatibilityModel(LlamaModel(settings))
-    context = ContextAssembler(store, settings.model_context_tokens)
+    context = ContextAssembler(store, settings.model_context_tokens, registry)
     turn_logger = _configure_logging(settings)
     gateway.audit_logger = turn_logger
 
@@ -171,7 +260,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "ok": bool(model_health.get("reachable") and model_health.get("alias_ok")),
             "application": {"name": "XODUZ XV12", "status": "healthy"},
-            "database": {"status": "healthy", "schema": "3", "path_owned": settings.root in settings.database_path.parents},
+            "database": {"status": "healthy", "schema": store.schema_version(), "path_owned": settings.root in settings.database_path.parents},
             "model": {
                 **model_health,
                 "expected_alias": settings.model_alias,
@@ -255,6 +344,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     gateway.register("files.local.read", files_capability.read)
     gateway.register("files.local.write", files_capability.write)
     gateway.register("files.local.modify", files_capability.modify)
+    gateway.register("files.local.batch_read", files_capability.batch_read)
+    gateway.register("engineering.repo.map", engineering_service.map)
+    gateway.register("engineering.code.search", engineering_service.search)
+    gateway.register("engineering.files.read", engineering_service.read)
+    gateway.register("engineering.files.batch_read", engineering_service.batch_read)
+    gateway.register("engineering.git.status", engineering_service.git_status)
+    gateway.register("engineering.git.diff", engineering_service.git_diff)
+    gateway.register("engineering.tests.inspect", engineering_service.tests_inspect)
     gateway.register("adas.si.inventory.read", adas_si_capability.inventory)
     gateway.register("adas.si.search", adas_si_capability.search)
     gateway.register("adas.si.record.write", adas_si_capability.write)
@@ -264,6 +361,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     gateway.register("calibration_iq.repair_orders.modify", calibration_iq_capability.modify)
     gateway.register("project.list", lambda _arguments, user: {"status": "verified", "projects": store.list_projects(user["id"])})
 
+    def _bind_active_project(user_id: str, project_id: str) -> dict[str, Any] | None:
+        """Activate a project both as the user's global last-selected project (preserves the
+        standalone Projects UI and its header chip) and, when called from within an open
+        conversation, as that conversation's own bound project -- so a different conversation
+        activating a different project cannot bleed into this one."""
+        activated = store.activate_project(user_id, project_id)
+        conversation_id = active_conversation_id()
+        if activated and conversation_id:
+            store.activate_project_for_conversation(user_id, conversation_id, project_id)
+        return activated
+
     def register_project_capability(arguments: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         project = store.create_project(
             user["id"],
@@ -271,7 +379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             arguments.get("reference"),
             str(arguments.get("description") or ""),
         )
-        activated = store.activate_project(user["id"], project["id"])
+        activated = _bind_active_project(user["id"], project["id"])
         return {"status": "registered_and_activated", "project": activated}
 
     gateway.register(
@@ -281,11 +389,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     gateway.register(
         "project.activate",
         lambda arguments, user: {
-            "status": "activated" if (project := store.activate_project(user["id"], str(arguments.get("project_id") or ""))) else "not_found",
+            "status": "activated" if (project := _bind_active_project(user["id"], str(arguments.get("project_id") or ""))) else "not_found",
             "project": project,
         },
     )
-    gateway.register("project.detach", lambda _arguments, user: {"status": "detached", "changed": store.deactivate_project(user["id"])})
+
+    def _detach_active_project(user_id: str) -> bool:
+        changed = store.deactivate_project(user_id)
+        conversation_id = active_conversation_id()
+        if conversation_id:
+            changed = store.deactivate_project_for_conversation(user_id, conversation_id) or changed
+        return changed
+
+    gateway.register("project.detach", lambda _arguments, user: {"status": "detached", "changed": _detach_active_project(user["id"])})
     gateway.register("service.calibration_iq.start", lambda arguments: start_calibration_iq(settings, arguments))
     gateway.register(
         "settings.voice.read",
@@ -427,9 +543,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         item = store.delete_attachment(user["id"], attachment_id)
         if not item:
             raise HTTPException(status_code=404, detail="Attachment not found")
-        target = (settings.root / item["storage_path"]).resolve()
-        owned_root = settings.attachments_path.resolve()
-        if target.is_relative_to(owned_root):
+        target = _resolve_attachment_path(settings, item["storage_path"])
+        if target:
             target.unlink(missing_ok=True)
         return Response(status_code=204)
 
@@ -448,9 +563,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(error)) from error
         attachment_note = ""
         if attachments:
-            attachment_note = "\n\nAttachments supplied (metadata only in Baseline 1):\n" + "\n".join(
+            lines = ["\n\nAttachments supplied:"] + [
                 f"- {item['original_name']} ({item['content_type']}, {item['size_bytes']} bytes)" for item in attachments
-            )
+            ]
+            excerpt_budget = ATTACHMENT_TOTAL_EXCERPT_CHAR_LIMIT
+            for item in attachments[:ATTACHMENT_INGEST_FILE_LIMIT]:
+                if excerpt_budget <= 0:
+                    break
+                attachment_path = _resolve_attachment_path(settings, item["storage_path"])
+                if not attachment_path:
+                    continue
+                excerpt = _ingest_attachment_excerpt(attachment_path, str(item["content_type"]))[:excerpt_budget]
+                if not excerpt:
+                    continue
+                excerpt_budget -= len(excerpt)
+                truncated = " (truncated)" if len(excerpt) >= ATTACHMENT_EXCERPT_CHAR_LIMIT else ""
+                lines.append(f"\n--- {item['original_name']} excerpt{truncated} ---\n{excerpt}")
+                if attachment_path.suffix.casefold() == ".pdf" or item["content_type"] == "application/pdf":
+                    try:
+                        artifact_store.register_file(
+                            user_id=user["id"], capability_id="attachment.ingest", source_path=attachment_path,
+                            title=item["original_name"], source_label="Uploaded attachment",
+                            conversation_id=conversation_id, scope_kind="full",
+                        )
+                    except ValueError:
+                        pass
+            attachment_note = "\n".join(lines)
         user_message = store.add_message(user["id"], conversation_id, "user", payload.message.strip() + attachment_note)
         active_subject = store.ensure_active_subject(user["id"], conversation_id, payload.message)
         turn_id = str(uuid.uuid4())
@@ -481,6 +619,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 store.update_trace(turn_id, model_started_at=started)
                 orchestrator = AssistantOrchestrator(app.state.model, registry, gateway)
                 cards: list[dict[str, Any]] = []
+                terminal: dict[str, Any] = {"status": "complete", "stop_reason": "natural_completion", "telemetry": {}}
                 async for event in orchestrator.stream(assembled.messages, user):
                     if await request.is_disconnected():
                         raise asyncio.CancelledError()
@@ -497,15 +636,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         card = {key: event[key] for key in ("capability_id", "arguments", "result")}
                         cards.append(card)
                         yield sse("capability", {"status": "complete", **card})
+                    elif event["type"] == "complete":
+                        terminal = {key: event[key] for key in ("status", "stop_reason", "telemetry") if key in event}
                 content = "".join(response_parts).strip()
                 if not content:
                     raise RuntimeError("Model completed without response content")
-                assistant = store.add_message(user["id"], conversation_id, "assistant", content, "complete", {"capability_cards": cards})
+                message_status = str(terminal.get("status") or "complete")
+                telemetry = dict(terminal.get("telemetry") or {})
+                metadata = {
+                    "capability_cards": cards,
+                    "stop_reason": terminal.get("stop_reason", "natural_completion"),
+                    "final_synthesis_performed": telemetry.get("final_synthesis_performed", False),
+                    **{key: telemetry[key] for key in ("model_rounds", "operation_count", "capability_count") if key in telemetry},
+                }
+                assistant = store.add_message(user["id"], conversation_id, "assistant", content, message_status, metadata)
+                if message_status == "complete":
+                    store.clear_evidence(user["id"], conversation_id)
+                else:
+                    evidence = build_evidence_snapshot(payload.message, cards, str(terminal.get("stop_reason") or ""), content)
+                    store.save_evidence(user["id"], conversation_id, evidence)
                 completed = utcnow()
-                detail = {"characters": len(content), "attachments": len(attachments), "capability_calls": len(cards)}
-                store.update_trace(turn_id, completed_at=completed, status="complete", detail=detail)
+                detail = {"characters": len(content), "attachments": len(attachments), "capability_calls": len(cards), "status": message_status, **telemetry}
+                store.update_trace(turn_id, completed_at=completed, status=message_status, detail=detail)
                 turn_logger.info(json.dumps({"event": "turn_complete", "turn_id": turn_id, "conversation_id": conversation_id, "user_id": user["id"], "first_token_at": first_token_at, **detail}))
-                yield sse("done", {"message_id": assistant["id"], "status": "complete"})
+                yield sse("done", {"message_id": assistant["id"], "status": message_status, "stop_reason": terminal.get("stop_reason", "natural_completion")})
             except asyncio.CancelledError:
                 content = "".join(response_parts).strip()
                 if content:

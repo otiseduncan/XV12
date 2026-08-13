@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,9 +29,25 @@ def estimate_tokens(text: str) -> int:
 
 
 class ContextAssembler:
-    def __init__(self, store: UserScopedStore, context_limit: int) -> None:
+    # Matches the largest response budget the ordinary orchestrator can request
+    # (ASSISTANT_RESPONSE_TOKENS_TECHNICAL in app/assistant.py) so accounting never assumes
+    # less generation headroom than a technical-analysis turn might actually use.
+    RESPONSE_TOKEN_RESERVE = 1536
+    SAFETY_MARGIN_TOKENS = 512
+
+    def __init__(self, store: UserScopedStore, context_limit: int, registry: Any | None = None) -> None:
         self.store = store
         self.context_limit = context_limit
+        self.registry = registry
+
+    def _tool_schema_tokens(self, user: dict[str, Any]) -> int:
+        if self.registry is None:
+            return 0
+        try:
+            tools = self.registry.model_tools(user)
+        except Exception:
+            return 0
+        return estimate_tokens(json.dumps(tools, ensure_ascii=False))
 
     def assemble(self, user: dict[str, Any], conversation_id: str) -> AssembledContext:
         sections = ["identity", "authenticated_user"]
@@ -39,7 +56,7 @@ class ContextAssembler:
             IDENTITY_CONTRACT,
             f"Authenticated user: {conversational_name} (role: {user['role']}, internal user id: {user['id']}). Address them by this conversational name when natural; never infer identity from email text. The internal id is for trusted scoping and should not be surfaced unless the user explicitly asks for the technical identifier.",
         ]
-        project = self.store.active_project(user["id"])
+        project = self.store.active_project_for_conversation(user["id"], conversation_id)
         if project:
             sections.append("active_project")
             system_parts.append(
@@ -54,15 +71,31 @@ class ContextAssembler:
         if summary:
             sections.append("rolling_summary")
             system_parts.append(f"Rolling conversation summary: {summary['summary']}")
+        evidence = self.store.get_evidence(user["id"], conversation_id)
+        if evidence:
+            sections.append("durable_evidence")
+            system_parts.append(
+                "Unresolved investigation evidence from a previous bounded turn in this conversation -- reuse it "
+                "instead of repeating the same capability calls, and continue toward next_action: "
+                + json.dumps(evidence, ensure_ascii=False)[:2500]
+            )
 
         system_text = "\n\n".join(system_parts)
-        budget = min(self.context_limit - 1800, 28600) - estimate_tokens(system_text)
+        # Reserve real space for everything that shares the context window alongside recent
+        # conversation: the system prompt, the tool schemas actually offered to this user,
+        # the response the model may generate, and a fixed safety margin -- not one flat
+        # guessed number regardless of how many capabilities are currently registered.
+        reserved = estimate_tokens(system_text) + self._tool_schema_tokens(user) + self.RESPONSE_TOKEN_RESERVE + self.SAFETY_MARGIN_TOKENS
+        budget = max(0, self.context_limit - reserved)
         recent = self.store.recent_messages(user["id"], conversation_id, 100)
         selected: list[dict[str, str]] = []
         used = 0
         for message in reversed(recent):
             cost = estimate_tokens(message["content"]) + 8
-            if selected and used + cost > budget:
+            # No exemption for the first (most recent) message: honoring the computed budget
+            # matters more than always keeping at least one message, and the chat API already
+            # bounds a single message to 20000 characters (~5000 tokens) at the request layer.
+            if used + cost > budget:
                 break
             selected.append({"role": message["role"], "content": message["content"]})
             used += cost
